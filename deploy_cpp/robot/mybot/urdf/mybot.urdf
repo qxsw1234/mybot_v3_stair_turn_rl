@@ -1,0 +1,405 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Mybot Quadruped URDF
+  Converted from mybot.xml (MuJoCo format).
+  Joint names and link hierarchy match robot_config.h DOF order.
+-->
+<robot name="mybot">
+
+  <!-- ==================== Materials ==================== -->
+  <material name="body_color">
+    <color rgba="0.67 0.69 0.77 1"/>
+  </material>
+  <material name="hip_color">
+    <color rgba="1 1 1 1"/>
+  </material>
+  <material name="thigh_color">
+    <color rgba="1 1 1 1"/>
+  </material>
+  <material name="calf_color">
+    <color rgba="0 0 0 1"/>
+  </material>
+  <material name="foot_color">
+    <color rgba="0 0 0 1"/>
+  </material>
+
+  <!-- ==================== Base Link ==================== -->
+  <!-- base_link is the fixed world reference frame -->
+  <link name="base_link"/>
+
+  <!-- body link (floating base of the robot) -->
+  <link name="body">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/body.STL"/>
+      </geometry>
+      <material name="body_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="-0.075044 0.0013153 0.023062" rpy="0 0 0"/>
+      <mass value="5.3036"/>
+      <inertia ixx="0.017259" ixy="0" ixz="0" iyy="0.017164" iyz="0" izz="0.012634"/>
+    </inertial>
+  </link>
+
+  <!-- Floating joint: base_link -> body -->
+  <!-- Initial position from MuJoCo: z=0.445m (standing height) -->
+  <joint name="floating_base" type="fixed">
+    <origin xyz="0 0 0.445" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="body"/>
+  </joint>
+
+  <!-- ==================== FR (Front Right) Leg ==================== -->
+
+  <link name="FR_hip">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FR_hip.STL"/>
+      </geometry>
+      <material name="hip_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.050324 -0.0023835 -0.00001926" rpy="0 0 0"/>
+      <mass value="0.64533"/>
+      <inertia ixx="0.00081299" ixy="0" ixz="0" iyy="0.00051628" iyz="0" izz="0.00043556"/>
+    </inertial>
+  </link>
+
+  <joint name="FR_hip_joint" type="revolute">
+    <origin xyz="0.0946 -0.062 -0.071" rpy="0 0 0"/>
+    <parent link="body"/>
+    <child link="FR_hip"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-0.48" upper="0.48" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="FR_thigh">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FR_thigh.STL"/>
+      </geometry>
+      <material name="thigh_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.0003687 -0.05094 -0.044849" rpy="0 0 0"/>
+      <mass value="1.107"/>
+      <inertia ixx="0.0030336" ixy="0" ixz="0" iyy="0.0026249" iyz="0" izz="0.00046586"/>
+    </inertial>
+  </link>
+
+  <joint name="FR_thigh_joint" type="revolute">
+    <origin xyz="0.085 -0.03295 0" rpy="0 0 0"/>
+    <parent link="FR_hip"/>
+    <child link="FR_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.44" upper="1.44" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="FR_calf">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FR_calf.STL"/>
+      </geometry>
+      <material name="calf_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.01731 0.000038634 -0.100139" rpy="0 0 0"/>
+      <mass value="0.29248"/>
+      <inertia ixx="0.0009493" ixy="0" ixz="0" iyy="0.0009031" iyz="0" izz="0.00006325"/>
+    </inertial>
+  </link>
+
+  <joint name="FR_calf_joint" type="revolute">
+    <origin xyz="0 -0.0705 -0.22" rpy="0 0 0"/>
+    <parent link="FR_thigh"/>
+    <child link="FR_calf"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.7" upper="-0.6" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="FR_foot">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FR_foot.STL"/>
+      </geometry>
+      <material name="foot_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.0335"/>
+      <inertia ixx="0.00000536" ixy="0" ixz="0" iyy="0.00000536" iyz="0" izz="0.00000536"/>
+    </inertial>
+  </link>
+
+  <joint name="FR_foot_fixed" type="fixed">
+    <origin xyz="0.0015191 0.00025002 -0.22467" rpy="0 0 0"/>
+    <parent link="FR_calf"/>
+    <child link="FR_foot"/>
+  </joint>
+
+  <!-- ==================== FL (Front Left) Leg ==================== -->
+
+  <link name="FL_hip">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FL_hip.STL"/>
+      </geometry>
+      <material name="hip_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.049109 0.0014996 -0.000019828" rpy="0 0 0"/>
+      <mass value="0.62455"/>
+      <inertia ixx="0.00080416" ixy="0" ixz="0" iyy="0.00051175" iyz="0" izz="0.00043104"/>
+    </inertial>
+  </link>
+
+  <joint name="FL_hip_joint" type="revolute">
+    <origin xyz="0.0946 0.062 -0.071" rpy="0 0 0"/>
+    <parent link="body"/>
+    <child link="FL_hip"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-0.48" upper="0.48" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="FL_thigh">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FL_thigh.STL"/>
+      </geometry>
+      <material name="thigh_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.00040284 0.05094 -0.044849" rpy="0 0 0"/>
+      <mass value="1.107"/>
+      <inertia ixx="0.0030336" ixy="0" ixz="0" iyy="0.0026249" iyz="0" izz="0.00046586"/>
+    </inertial>
+  </link>
+
+  <joint name="FL_thigh_joint" type="revolute">
+    <origin xyz="0.085 0.03295 0" rpy="0 0 0"/>
+    <parent link="FL_hip"/>
+    <child link="FL_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.44" upper="1.44" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="FL_calf">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FL_calf.STL"/>
+      </geometry>
+      <material name="calf_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.017331 -0.000038626 -0.100135" rpy="0 0 0"/>
+      <mass value="0.29248"/>
+      <inertia ixx="0.0009493" ixy="0" ixz="0" iyy="0.0009033" iyz="0" izz="0.00006306"/>
+    </inertial>
+  </link>
+
+  <joint name="FL_calf_joint" type="revolute">
+    <origin xyz="0 0.0705 -0.22" rpy="0 0 0"/>
+    <parent link="FL_thigh"/>
+    <child link="FL_calf"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.7" upper="-0.6" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="FL_foot">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/FL_foot.STL"/>
+      </geometry>
+      <material name="foot_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.0335"/>
+      <inertia ixx="0.00000536" ixy="0" ixz="0" iyy="0.00000536" iyz="0" izz="0.00000536"/>
+    </inertial>
+  </link>
+
+  <joint name="FL_foot_fixed" type="fixed">
+    <origin xyz="0.0015191 -0.00024999 -0.22467" rpy="0 0 0"/>
+    <parent link="FL_calf"/>
+    <child link="FL_foot"/>
+  </joint>
+
+  <!-- ==================== RR (Rear Right) Leg ==================== -->
+
+  <link name="RR_hip">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RR_hip.STL"/>
+      </geometry>
+      <material name="hip_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="-0.050937 -0.001551 0.00002072" rpy="0 0 0"/>
+      <mass value="0.60377"/>
+      <inertia ixx="0.00079963" ixy="0" ixz="0" iyy="0.00050292" iyz="0" izz="0.00042651"/>
+    </inertial>
+  </link>
+
+  <joint name="RR_hip_joint" type="revolute">
+    <origin xyz="-0.2146 -0.062 -0.071" rpy="0 0 0"/>
+    <parent link="body"/>
+    <child link="RR_hip"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-0.48" upper="0.48" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="RR_thigh">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RR_thigh.STL"/>
+      </geometry>
+      <material name="thigh_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.00001288 -0.05094 -0.04485" rpy="0 0 0"/>
+      <mass value="1.107"/>
+      <inertia ixx="0.0030336" ixy="0" ixz="0" iyy="0.0026254" iyz="0" izz="0.00046537"/>
+    </inertial>
+  </link>
+
+  <joint name="RR_thigh_joint" type="revolute">
+    <origin xyz="-0.085 -0.03295 0" rpy="0 0 0"/>
+    <parent link="RR_hip"/>
+    <child link="RR_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.44" upper="1.44" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="RR_calf">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RR_calf.STL"/>
+      </geometry>
+      <material name="calf_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.01731 0.000038634 -0.100139" rpy="0 0 0"/>
+      <mass value="0.29248"/>
+      <inertia ixx="0.0009493" ixy="0" ixz="0" iyy="0.0009031" iyz="0" izz="0.00006325"/>
+    </inertial>
+  </link>
+
+  <joint name="RR_calf_joint" type="revolute">
+    <origin xyz="0 -0.0705 -0.22" rpy="0 0 0"/>
+    <parent link="RR_thigh"/>
+    <child link="RR_calf"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.7" upper="-0.6" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="RR_foot">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RR_foot.STL"/>
+      </geometry>
+      <material name="foot_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.0335"/>
+      <inertia ixx="0.00000536" ixy="0" ixz="0" iyy="0.00000536" iyz="0" izz="0.00000536"/>
+    </inertial>
+  </link>
+
+  <joint name="RR_foot_fixed" type="fixed">
+    <origin xyz="0.0015191 0.00025002 -0.22467" rpy="0 0 0"/>
+    <parent link="RR_calf"/>
+    <child link="RR_foot"/>
+  </joint>
+
+  <!-- ==================== RL (Rear Left) Leg ==================== -->
+
+  <link name="RL_hip">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RL_hip.STL"/>
+      </geometry>
+      <material name="hip_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="-0.050937 0.001551 0.00002072" rpy="0 0 0"/>
+      <mass value="0.60377"/>
+      <inertia ixx="0.00079963" ixy="0" ixz="0" iyy="0.00050292" iyz="0" izz="0.00042651"/>
+    </inertial>
+  </link>
+
+  <joint name="RL_hip_joint" type="revolute">
+    <origin xyz="-0.2146 0.062 -0.071" rpy="0 0 0"/>
+    <parent link="body"/>
+    <child link="RL_hip"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-0.48" upper="0.48" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="RL_thigh">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RL_thigh.STL"/>
+      </geometry>
+      <material name="thigh_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.00004708 0.05094 -0.04485" rpy="0 0 0"/>
+      <mass value="1.107"/>
+      <inertia ixx="0.0030336" ixy="0" ixz="0" iyy="0.0026254" iyz="0" izz="0.00046537"/>
+    </inertial>
+  </link>
+
+  <joint name="RL_thigh_joint" type="revolute">
+    <origin xyz="-0.085 0.03295 0" rpy="0 0 0"/>
+    <parent link="RL_hip"/>
+    <child link="RL_thigh"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.44" upper="1.44" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="RL_calf">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RL_calf.STL"/>
+      </geometry>
+      <material name="calf_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0.01733 -0.000038626 -0.100135" rpy="0 0 0"/>
+      <mass value="0.29248"/>
+      <inertia ixx="0.0009493" ixy="0" ixz="0" iyy="0.0009033" iyz="0" izz="0.00006306"/>
+    </inertial>
+  </link>
+
+  <joint name="RL_calf_joint" type="revolute">
+    <origin xyz="0 0.0705 -0.22" rpy="0 0 0"/>
+    <parent link="RL_thigh"/>
+    <child link="RL_calf"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.7" upper="-0.6" effort="33.5" velocity="30.0"/>
+  </joint>
+
+  <link name="RL_foot">
+    <visual>
+      <geometry>
+        <mesh filename="package://deploy_cpp/robot/mybot/meshes/RL_foot.STL"/>
+      </geometry>
+      <material name="foot_color"/>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.0335"/>
+      <inertia ixx="0.00000536" ixy="0" ixz="0" iyy="0.00000536" iyz="0" izz="0.00000536"/>
+    </inertial>
+  </link>
+
+  <joint name="RL_foot_fixed" type="fixed">
+    <origin xyz="0.0015191 -0.00024998 -0.22467" rpy="0 0 0"/>
+    <parent link="RL_calf"/>
+    <child link="RL_foot"/>
+  </joint>
+
+</robot>

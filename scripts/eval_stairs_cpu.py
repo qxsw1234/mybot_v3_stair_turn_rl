@@ -63,6 +63,11 @@ def main():
     ap.add_argument("--stress", action="store_true",
                     help="keep domain randomization on (training settings)")
     ap.add_argument("--out", type=str, default=None)
+    ap.add_argument("--terrain-cols", type=int, default=8)
+    ap.add_argument("--border-size", type=float, default=2.0)
+    ap.add_argument("--terrain-type", type=int, default=2,
+                    help="0=smooth slope 1=rough slope 2=stairs up 3=stairs down "
+                         "4=discrete 5=stepping stones 7=smooth flat 8=rough flat")
     args = ap.parse_args()
 
     run = args.run
@@ -81,13 +86,14 @@ def main():
     Cfg.terrain.curriculum = False               # -> envs spread over all rows
     Cfg.terrain.max_init_terrain_level = 11
     Cfg.terrain.min_init_terrain_level = 0
-    Cfg.terrain.terrain_proportions = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # stairs up only
+    Cfg.terrain.terrain_proportions = [0.0] * 9
+    Cfg.terrain.terrain_proportions[args.terrain_type] = 1.0
     # CPU PhysX segfaults inside add_triangle_mesh on a full-size map: the
     # training map is border 25 m + 50x8 m tiles ~= 6.5M vertices. Shrink the
     # map (fewer columns / smaller border) but keep all 12 difficulty rows so
     # the stair-height coverage (row 4 = 10.4 cm, row 8 = 15.8 cm) is intact.
-    Cfg.terrain.border_size = 5.0
-    Cfg.terrain.num_cols = 8
+    Cfg.terrain.border_size = args.border_size
+    Cfg.terrain.num_cols = args.terrain_cols
     Cfg.asset.file = '{MINI_GYM_ROOT_DIR}/resources/robots/mybot_v3/urdf/mybot_v3.urdf'
     Cfg.asset.self_collisions = 1
 

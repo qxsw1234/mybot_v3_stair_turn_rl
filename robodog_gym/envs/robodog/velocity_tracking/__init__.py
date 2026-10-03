@@ -67,24 +67,24 @@ class VelocityTrackingEasyEnv(LeggedRobot):
 
         policy_obs_buf, estimator_obs_buf, privileged_obs_buf, rew_buf, reset_buf, extras = super().step(actions)
 
-        # Feet indices are resolved from cfg.asset.foot_name during asset initialization.
-        self.foot_positions = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices,
-                               0:3]
-
-        extras.update({
-            "joint_pos": self.dof_pos.cpu().numpy(),
-            "joint_vel": self.dof_vel.cpu().numpy(),
-            "joint_pos_target": self.joint_pos_target.cpu().detach().numpy(),
-            "joint_vel_target": torch.zeros(self.num_actions, device=self.device).cpu().numpy(),
-            "body_linear_vel": self.base_lin_vel.cpu().detach().numpy(),
-            "body_angular_vel": self.base_ang_vel.cpu().detach().numpy(),
-            "body_linear_vel_cmd": self.commands.cpu().numpy()[:, 0:2],
-            "body_angular_vel_cmd": self.commands.cpu().numpy()[:, 2:],
-            "contact_states": (self.contact_forces[:, self.feet_indices, 2] > 1.).detach().cpu().numpy().copy(),
-            "foot_positions": (self.foot_positions).detach().cpu().numpy().copy(),
-            "body_pos": self.root_states[:, 0:3].detach().cpu().numpy(),
-            "torques": self.torques.detach().cpu().numpy()
-        })
+        # Deployment and data collection tools consume this telemetry. PPO does
+        # not, and copying every environment tensor from GPU to NumPy at every
+        # policy step forces a costly device synchronization during training.
+        if getattr(self.cfg.env, "export_step_telemetry", True):
+            extras.update({
+                "joint_pos": self.dof_pos.cpu().numpy(),
+                "joint_vel": self.dof_vel.cpu().numpy(),
+                "joint_pos_target": self.joint_pos_target.cpu().detach().numpy(),
+                "joint_vel_target": torch.zeros(self.num_actions, device=self.device).cpu().numpy(),
+                "body_linear_vel": self.base_lin_vel.cpu().detach().numpy(),
+                "body_angular_vel": self.base_ang_vel.cpu().detach().numpy(),
+                "body_linear_vel_cmd": self.commands.cpu().numpy()[:, 0:2],
+                "body_angular_vel_cmd": self.commands.cpu().numpy()[:, 2:],
+                "contact_states": (self.contact_forces[:, self.feet_indices, 2] > 1.).detach().cpu().numpy().copy(),
+                "foot_positions": self.foot_positions.detach().cpu().numpy().copy(),
+                "body_pos": self.root_states[:, 0:3].detach().cpu().numpy(),
+                "torques": self.torques.detach().cpu().numpy(),
+            })
 
         return {'policy_obs': policy_obs_buf, 'estimator_obs': estimator_obs_buf, 'privileged_obs': privileged_obs_buf}, rew_buf, reset_buf, extras
     
@@ -105,4 +105,3 @@ class VelocityTrackingEasyEnv(LeggedRobot):
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
         obs_dict, _, _, _ = self.step(torch.zeros(self.num_envs, self.num_actions, device=self.device, requires_grad=False))
         return obs_dict
-

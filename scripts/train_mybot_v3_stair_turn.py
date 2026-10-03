@@ -45,7 +45,11 @@ def train_mybot_v3_stair_turn(
     Cfg.cfg_ppo.runner.resume_path = resume_run
     Cfg.cfg_ppo.runner.checkpoint = checkpoint
     Cfg.cfg_ppo.runner.save_interval = 250
+    Cfg.cfg_ppo.runner.save_video_interval = 0
+    Cfg.cfg_ppo.runner.save_curriculum_plot_interval = 250
     Cfg.cfg_ppo.runner.wandb_logging = False
+    Cfg.env.record_video = False
+    Cfg.env.export_step_telemetry = False
     # # Cfg.env.num_recording_envs = 1
     # # Cfg.terrain.num_cols = 3
     # # Cfg.terrain.num_rows = 3
@@ -258,7 +262,9 @@ def train_mybot_v3_stair_turn(
     # commands
     Cfg.commands.num_commands = 3 # change!
 
-    Cfg.normalization.clip_actions = 20.0 # was 10 way lower than RSL...
+    # action_scale=0.25, so this bounds commanded joint offsets to about
+    # +/-0.75 rad and prevents rare Gaussian tails from creating torque spikes.
+    Cfg.normalization.clip_actions = 3.0
     Cfg.normalization.clip_observations = 100.0
 
   
@@ -276,7 +282,10 @@ def train_mybot_v3_stair_turn(
     Cfg.terrain.legacy_curriculum = False
 
     Cfg.terrain.border_size = 25
-    Cfg.terrain.max_init_terrain_level = 2 # starting curriculum state
+    Cfg.terrain.max_init_terrain_level = 4 if resume_run else 2
+    Cfg.terrain.curriculum_min_progress = 1.0
+    Cfg.terrain.curriculum_stair_min_progress = 2.0
+    Cfg.terrain.curriculum_stair_min_elevation = 0.06
     Cfg.terrain.terrain_length = 8.
     Cfg.terrain.terrain_width = 8.
     Cfg.terrain.num_rows = 12
@@ -384,8 +393,10 @@ def train_mybot_v3_stair_turn(
     Cfg.rewards.use_terminal_body_impact = True
     Cfg.rewards.terminal_body_height = 0.10
     Cfg.rewards.use_terminal_roll_pitch = True
-    Cfg.rewards.terminal_body_ori =  1.39626  # 80 degrees #1.22173 # 70 degrees
-    Cfg.reward_scales.termination = -0 # not
+    Cfg.rewards.terminal_body_ori = 1.13446  # 65 degrees
+    # Reward scales are multiplied by dt=0.02 during environment setup. The
+    # special termination reward is applied once, so -50 becomes -1 per fall.
+    Cfg.reward_scales.termination = -50.0
     
 
     # ---------------------
@@ -403,10 +414,10 @@ def train_mybot_v3_stair_turn(
 
 
     #positive rewards
-    Cfg.reward_scales.tracking_lin_vel = 1.0
+    Cfg.reward_scales.tracking_lin_vel = 2.0
     Cfg.rewards.tracking_sigma = 0.25  # tracking reward = exp(-error^2/sigma)
     Cfg.rewards.end_sigma_curriculum_iter = 0 # disable curriculum
-    Cfg.reward_scales.tracking_ang_vel = 0.8
+    Cfg.reward_scales.tracking_ang_vel = 1.0
     Cfg.rewards.tracking_sigma_yaw = 0.25
     Cfg.rewards.end_sigma_yaw_curriculum_iter = 0
 
@@ -446,11 +457,11 @@ def train_mybot_v3_stair_turn(
     Cfg.reward_scales.lin_vel_z = -2.0
     Cfg.reward_scales.ang_vel_xy = -0.05
 
-    Cfg.reward_scales.dof_pos_limits = -10.0
+    Cfg.reward_scales.dof_pos_limits = -2.0
     Cfg.rewards.soft_dof_pos_limit = 0.9
 
     Cfg.rewards.soft_torque_limit = 0.7
-    Cfg.reward_scales.torque_limits = -10.0
+    Cfg.reward_scales.torque_limits = -2.0
     
 
 
@@ -480,15 +491,29 @@ def train_mybot_v3_stair_turn(
     # Learing config
     #-------------
 
-    Cfg.cfg_ppo.algorithm.schedule = 'adaptive' # 'adaptive' # if not adaptive let Adam handle it. Adaptive is KL thing from RSL paper
-    # A resumed run restores model weights, while this learner does not persist
-    # optimizer state. Use a gentler restart learning rate to avoid a policy
-    # collapse immediately after loading a checkpoint.
-    Cfg.cfg_ppo.algorithm.learning_rate = 3.e-4 if resume_run else 1.e-3
-    Cfg.cfg_ppo.algorithm.adaptation_module_learning_rate = 3.e-4 if resume_run else 1.e-3
-    Cfg.cfg_ppo.algorithm.desired_kl = 0.01 # default 0.01 # Used by adaptive learning rate
-    Cfg.cfg_ppo.algorithm.lr_adaptive_schedule_decay = 1.25 # 1.1 1.001 # defaul 1.5 decay factor for adaptive KL-based learning rate schedule
-    # try to increase entropy!
+    # A mature policy needs small, bounded updates. Checkpoints contain model
+    # weights but no optimizer state, so resuming with the original adaptive
+    # schedule can make the learning rate jump and destroy an otherwise good
+    # controller. Resumed runs therefore use conservative PPO fine tuning.
+    Cfg.cfg_ppo.algorithm.schedule = 'fixed' if resume_run else 'adaptive'
+    Cfg.cfg_ppo.algorithm.learning_rate = 2.e-5 if resume_run else 1.e-3
+    Cfg.cfg_ppo.algorithm.critic_learning_rate = 1.e-5 if resume_run else 1.e-3
+    Cfg.cfg_ppo.algorithm.adaptation_module_learning_rate = 1.e-5 if resume_run else 1.e-3
+    Cfg.cfg_ppo.algorithm.value_loss_coef = 0.5 if resume_run else 1.0
+    Cfg.cfg_ppo.algorithm.value_huber_delta = 5.0 if resume_run else None
+    Cfg.cfg_ppo.algorithm.clip_param = 0.10 if resume_run else 0.20
+    Cfg.cfg_ppo.algorithm.entropy_coef = 0.002 if resume_run else 0.01
+    Cfg.cfg_ppo.algorithm.num_learning_epochs = 3 if resume_run else 5
+    Cfg.cfg_ppo.algorithm.max_grad_norm = 0.5 if resume_run else 1.0
+    Cfg.cfg_ppo.algorithm.critic_max_grad_norm = 0.5 if resume_run else 1.0
+    Cfg.cfg_ppo.algorithm.desired_kl = 0.008 if resume_run else 0.01
+    Cfg.cfg_ppo.algorithm.hard_kl_limit = 0.020 if resume_run else None
+    Cfg.cfg_ppo.algorithm.lr_adaptive_schedule_decay = 1.25
+    Cfg.cfg_ppo.algorithm.action_clip = Cfg.normalization.clip_actions
+
+    # Abort before a bad late-stage update can be saved as the new best model.
+    Cfg.cfg_ppo.runner.divergence_value_loss_threshold = 25.0 if resume_run else 100.0
+    Cfg.cfg_ppo.runner.divergence_patience = 3
 
     #-------------
     # Commands
@@ -617,7 +642,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     run_group = (
-        f"mybot_v3_stair_turn_velocity_curriculum_resume_{args.checkpoint:06d}"
+        f"mybot_v3_stair_turn_improved_resume_{args.checkpoint:06d}"
         if args.resume_run is not None
         else "mybot_v3_stair_turn_from_scratch"
     )
@@ -678,6 +703,16 @@ if __name__ == '__main__':
                 - yKey: mean_adaptation_module_test_loss/mean
                   xKey: iterations
                 - yKey: learning_rate/mean
+                  xKey: iterations
+                - yKey: actor_grad_norm/mean
+                  xKey: iterations
+                - yKey: critic_grad_norm/mean
+                  xKey: iterations
+                - yKey: return_std/mean
+                  xKey: iterations
+                - yKey: action_saturation_fraction/mean
+                  xKey: iterations
+                - yKey: train/episode/curriculum_stair_success/mean
                   xKey: iterations
                 """, filename=".charts.yml", dedent=True)
 

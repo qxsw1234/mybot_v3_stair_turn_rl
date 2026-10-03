@@ -1,0 +1,21 @@
+{
+  "terrain": "stairs",
+  "control_steps": 500,
+  "sim_time_s": 10.0,
+  "base_xyz": [
+    1.154674768447876,
+    2.095799684524536,
+    0.3806394934654236
+  ],
+  "displacement_xyz": [
+    1.154674768447876,
+    2.095799684524536,
+    0.03063949942588806
+  ],
+  "mean_abs_action": 1.2898090702692668,
+  "action_saturation_fraction": 0.146,
+  "base_z_min": 0.3394703903200829,
+  "base_z_max": 0.5306991892558168,
+  "max_tilt_deg": 33.78791567529245,
+  "fell": false
+}

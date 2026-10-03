@@ -90,7 +90,8 @@ struct RobotRuntimeConfig {
   float cmd_yaw_step = 0.2f;
 
   float clip_obs = 100.0f;
-  float clip_actions = 20.0f;
+  // train_mybot_v3_stair_turn.py clips policy actions to [-3, 3].
+  float clip_actions = 3.0f;
   float kd_damp_motor = 0.1f;
   std::array<int, 4> hip_indices = {0, 3, 6, 9};
 

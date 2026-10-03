@@ -5,18 +5,18 @@ the Python MuJoCo simulation node via ROS2 topics.
 
 NOTE: The Python MuJoCo sim node must be started separately in the
       mujoco_sim conda environment:
-        conda activate mujoco_sim
-        source /opt/ros/humble/setup.bash
-        python3 sim/mujoco_sim_node.py
+        conda activate robodog_gym
+        source /opt/ros/foxy/setup.bash
+        python3 sim/mujoco_sim_node.py --robot-config config/robots/mybot_v3_cse_sim.yaml
 
 Usage (terminal 1 - MuJoCo sim):
-  cd /home/getting/humble/Quadruped/elmap-rl-controller/deploy_cpp
-  conda activate mujoco_sim && source /opt/ros/humble/setup.bash
-  python3 sim/mujoco_sim_node.py --robot-config config/robots/mybot_v2_1_cse.yaml
+  cd /home/ldl/mybot_v3_stair_turn_rl/deploy_cpp
+  conda activate robodog_gym && source /opt/ros/foxy/setup.bash
+  python3 sim/mujoco_sim_node.py --robot-config config/robots/mybot_v3_cse_sim.yaml
 
 Usage (terminal 2 - deploy_node):
-  source /opt/ros/humble/setup.bash
-  source ~/humble/Quadruped/HIMLoco/install/setup.bash
+  source /opt/ros/foxy/setup.bash
+  source /home/ldl/mybot_v3_stair_turn_rl/install/setup.bash
   ros2 launch deploy_cpp sim.launch.py
 """
 
@@ -82,7 +82,7 @@ def _launch_setup(context):
 
 def generate_launch_description():
     pkg_dir = get_package_share_directory('deploy_cpp')
-    default_cfg = os.path.join(pkg_dir, 'config', 'robots', 'mybot_v2_1_cse.yaml')
+    default_cfg = os.path.join(pkg_dir, 'config', 'robots', 'mybot_v3_cse_sim.yaml')
 
     return LaunchDescription([
         DeclareLaunchArgument('robot_config_file', default_value=default_cfg,

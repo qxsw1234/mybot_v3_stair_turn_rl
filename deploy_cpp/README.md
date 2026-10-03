@@ -1,11 +1,11 @@
-# mybot_v2_1 CSE Sim2Sim / Sim2Real 部署说明
+# MyBot V3 CSE Sim2Sim / Sim2Real 部署说明
 
 这个 ROS2/C++ 包用于把本仓库训练得到的 **exteroceptive CSE 强化学习策略** 部署到：
 
 - **Sim2Sim**：MuJoCo 仿真。MuJoCo 物理仿真由 Python bridge 运行，C++ 节点负责策略推理和控制。
 - **Sim2Real**：真实 mybot_v2_1 机器人。C++ 节点订阅 IMU 和高程信息，通过 Unitree GO-M8010-6 SDK 控制 12 个电机。
 
-新的部署代码位于 `deploy_cpp` 根目录。`deploy_cpp/reference` 是之前 HIMLoco 的参考实现，只作为对照保留。
+当前 sim2sim 配置是 `config/robots/mybot_v3_cse_sim.yaml`，机器人模型是 `robot/mybot_v3`。`deploy_cpp/reference` 是之前 HIMLoco 的参考实现，只作为对照保留。
 
 ## 1. 部署策略结构
 
@@ -96,11 +96,23 @@ deploy_cpp/
 
 ## 3. 模型文件放置
 
+当前 sim2sim 选用的是 `ac_weights_059000.pt`（训练运行
+`mybot_v3_stair_turn_improved_resume_040500/2026-10-02_03-23-39.173775`）。它已经导出并放置为下面两个默认文件：
+
 把训练导出的两个 JIT 文件放到：
 
 ```text
 deploy_cpp/policy/adaptation_module_latest.jit
 deploy_cpp/policy/body_latest.jit
+```
+
+如需重新生成该检查点的 JIT 文件：
+
+```bash
+python scripts/utils/convert_weights_to_jit_cpu.py \
+  --runs_dir /home/ldl/mybot_v3_stair_turn_rl/runs \
+  --run_label mybot_v3_stair_turn_improved_resume_040500/2026-10-02_03-23-39.173775 \
+  --iter 059000
 ```
 
 默认配置文件中对应字段是：
@@ -110,7 +122,7 @@ adaptation_module_path: policy/adaptation_module_latest.jit
 body_path: policy/body_latest.jit
 ```
 
-如果模型放在其他地方，可以直接在 `config/robots/mybot_v2_1_cse.yaml` 中改成绝对路径。
+如果模型放在其他地方，可以直接在 `config/robots/mybot_v3_cse_sim.yaml` 中改成绝对路径。
 
 ## 4. 主配置文件
 
@@ -230,20 +242,20 @@ nominal_base_height: 0.34
 推荐从仓库根目录构建：
 
 ```bash
-cd /home/getting/humble/Quadruped/elmap-rl-controller
-source /opt/ros/humble/setup.bash
+cd /home/ldl/mybot_v3_stair_turn_rl
+source /opt/ros/foxy/setup.bash
 colcon build --base-paths deploy_cpp --packages-select deploy_cpp \
-  --cmake-args -DTorch_DIR=/opt/libtorch/share/cmake/Torch
+  --cmake-args -DTorch_DIR=/home/ldl/anaconda3/envs/robodog_gym/lib/python3.8/site-packages/torch/share/cmake/Torch
 source install/setup.bash
 ```
 
 也可以进入 `deploy_cpp` 目录构建：
 
 ```bash
-cd /home/getting/humble/Quadruped/elmap-rl-controller/deploy_cpp
-source /opt/ros/humble/setup.bash
+cd /home/ldl/mybot_v3_stair_turn_rl/deploy_cpp
+source /opt/ros/foxy/setup.bash
 colcon build --packages-select deploy_cpp \
-  --cmake-args -DTorch_DIR=/opt/libtorch/share/cmake/Torch
+  --cmake-args -DTorch_DIR=/home/ldl/anaconda3/envs/robodog_gym/lib/python3.8/site-packages/torch/share/cmake/Torch
 source install/setup.bash
 ```
 
@@ -261,26 +273,67 @@ find /opt /home/getting -path '*TorchConfig.cmake' 2>/dev/null
 
 ## 7. Sim2Sim: MuJoCo 仿真
 
-MuJoCo 物理仿真由 Python 节点运行；C++ `deploy_node` 负责订阅仿真状态、运行 CSE 策略、发布关节目标。
+推荐先使用仓库根目录下的独立 Python 路径验证 sim2sim。它直接加载 TorchScript 策略，不依赖 ROS2、LibTorch 或 Unitree SDK：
+
+```bash
+cd /home/ldl/mybot_v3_stair_turn_rl
+conda activate robodog_gym
+python scripts/sim2sim_mujoco.py --headless --duration 5 --vx 0.2
+```
+
+打开 MuJoCo viewer：
+
+```bash
+python scripts/sim2sim_mujoco.py --interactive --terrain-mode stairs --duration 600
+```
+
+交互控制：`W/S` 前后、`A/D` 左右、`Q/E` 转向。按住方向键会对机身施加外力：上/下为世界坐标
+`+x/-x`，左/右为 `+y/-y`；`U/O` 为竖直 `+z/-z` 外力。默认外力为 35 N，可用
+`--disturbance-force` 调整。楼梯不是另一个模型文件，而是同一 MuJoCo XML 中的可切换几何体，必须加上
+`--terrain-mode stairs` 才会启用。
+
+测试楼梯和转向：
+
+```bash
+python scripts/sim2sim_mujoco.py --terrain-mode stairs --duration 20 --vx 0.2
+python scripts/sim2sim_mujoco.py --headless --duration 5 --yaw 0.5
+```
+
+headless 模式会在结束时打印一条 JSON 摘要；也可以保存为文件，便于批量对比：
+
+```bash
+python scripts/sim2sim_mujoco.py --headless --duration 10 --vx 0.2 \
+  --metrics-json /tmp/mybot_v3_flat.json
+python scripts/sim2sim_mujoco.py --headless --terrain-mode stairs \
+  --duration 10 --vx 0.2 --stop-on-fall --fail-on-fall
+```
+
+摘要包含最终位移、最大倾角、动作饱和率和是否摔倒。楼梯的起点、台阶高度、踏步深度、宽度、台阶数和平台长度都在
+`mybot_v3_cse_sim.yaml` 中调整；当前楼梯模型只是可重复的部署闭环测试场景，不能替代训练时的完整随机地形。
+
+sim2sim 与训练保持 `clip_actions: 3.0`，即动作始终限制在 `[-3, 3]`，再乘以 `action_scale: 0.25` 生成关节目标偏移。
+
+ROS2 bridge 路径仍然保留：MuJoCo 物理仿真由 Python 节点运行；C++ `deploy_node` 负责订阅仿真状态、运行 CSE 策略、发布关节目标。当前机器使用 ROS2 Foxy，且 C++ 实机目标需要与本机 LibTorch/Unitree SDK 的 ABI 一致。
 
 ### 终端 1: 启动 MuJoCo bridge
 
 ```bash
-cd /home/getting/humble/Quadruped/elmap-rl-controller/deploy_cpp
-conda activate mujoco_sim
-source /opt/ros/humble/setup.bash
-python3 sim/mujoco_sim_node.py --robot-config config/robots/mybot_v2_1_cse.yaml
+cd /home/ldl/mybot_v3_stair_turn_rl
+conda activate robodog_gym
+source /opt/ros/foxy/setup.bash
+python3 deploy_cpp/sim/mujoco_sim_node.py \
+  --robot-config deploy_cpp/config/robots/mybot_v3_cse_sim.yaml
 ```
 
 ### 终端 2: 启动 C++ 控制节点
 
 ```bash
-cd /home/getting/humble/Quadruped/elmap-rl-controller
-source /opt/ros/humble/setup.bash
+cd /home/ldl/mybot_v3_stair_turn_rl
+source /opt/ros/foxy/setup.bash
 source install/setup.bash
 
 ros2 run deploy_cpp deploy_node --ros-args \
-  -p robot_config_file:=/home/getting/humble/Quadruped/elmap-rl-controller/deploy_cpp/config/robots/mybot_v2_1_cse.yaml \
+  -p robot_config_file:=/home/ldl/mybot_v3_stair_turn_rl/deploy_cpp/config/robots/mybot_v3_cse_sim.yaml \
   -p sim_mode:=true \
   -p debug_no_motor:=false \
   -p sim_pingpong_mode:=false

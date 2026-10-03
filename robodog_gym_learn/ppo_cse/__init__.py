@@ -298,9 +298,11 @@ class Runner:
         lenbuffer = deque(maxlen=100)
         rewbuffer_eval = deque(maxlen=100)
         lenbuffer_eval = deque(maxlen=100)
+        divergence_bad_updates = 0
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
+        first_learning_iteration = self.current_learning_iteration
         tot_iter = self.current_learning_iteration + num_learning_iterations
         for it in range(self.current_learning_iteration, tot_iter):
             start = time.time()
@@ -430,8 +432,53 @@ class Runner:
                 mean_decoder_test_loss=mean_decoder_test_loss,
                 mean_decoder_test_loss_student=mean_decoder_test_loss_student,
                 mean_adaptation_module_test_loss=mean_adaptation_module_test_loss,
-                learning_rate = self.alg.learning_rate
+                learning_rate=self.alg.learning_rate,
+                policy_kl_mean=self.alg.last_kl_mean,
+                policy_kl_max=self.alg.last_kl_max,
+                skipped_policy_updates=self.alg.skipped_policy_updates,
+                invalid_policy_updates=self.alg.invalid_policy_updates,
+                invalid_critic_updates=self.alg.invalid_critic_updates,
+                actor_grad_norm=self.alg.actor_grad_norm,
+                critic_grad_norm=self.alg.critic_grad_norm,
+                critic_learning_rate=self.alg.critic_optimizer.param_groups[0]['lr'],
+                return_mean=self.alg.return_mean,
+                return_std=self.alg.return_std,
+                return_abs_max=self.alg.return_abs_max,
+                action_saturation_fraction=self.alg.action_saturation_fraction,
             )
+
+            # Stop before a diverging policy can become the next saved model.
+            # The last periodic checkpoint remains available for a clean resume.
+            divergence_threshold = getattr(self.cfg_ppo.runner, 'divergence_value_loss_threshold', None)
+            losses_are_finite = np.isfinite(mean_value_loss) and np.isfinite(mean_surrogate_loss)
+            divergence_warmup_iterations = int(getattr(
+                self.cfg_ppo.runner, 'divergence_warmup_iterations', 0))
+            divergence_guard_warming_up = (
+                it - first_learning_iteration < divergence_warmup_iterations)
+            loss_is_excessive = (
+                not divergence_guard_warming_up and
+                divergence_threshold is not None and
+                mean_value_loss > divergence_threshold)
+            if not losses_are_finite:
+                divergence_bad_updates = getattr(self.cfg_ppo.runner, 'divergence_patience', 3)
+            elif loss_is_excessive:
+                divergence_bad_updates += 1
+            else:
+                divergence_bad_updates = 0
+
+            divergence_patience = int(getattr(self.cfg_ppo.runner, 'divergence_patience', 3))
+            if divergence_bad_updates >= divergence_patience:
+                message = (
+                    f'[DIVERGENCE GUARD] stopped at iteration {it}: '
+                    f'value_loss={mean_value_loss:.6g}, surrogate_loss={mean_surrogate_loss:.6g}, '
+                    f'kl_max={self.alg.last_kl_max:.6g}. '
+                    'Resume from the last healthy periodic checkpoint.'
+                )
+                print(message, flush=True)
+                os.makedirs(self.run_path, exist_ok=True)
+                with open(os.path.join(self.run_path, 'DIVERGENCE_GUARD.txt'), 'w') as guard_file:
+                    guard_file.write(message + '\n')
+                return
 
             if it % self.cfg_ppo.runner.save_curriculum_plot_interval == 0 and self.env.cfg.terrain.curriculum:
                 self.log_terrain_curriculum_plot(it)
@@ -466,6 +513,12 @@ class Runner:
 
                     logger.upload_file(file_path=adaptation_module_path, target_path=f"checkpoints/", once=False)
                     logger.upload_file(file_path=body_path, target_path=f"checkpoints/", once=False)
+                    numbered_adaptation_path = f"{path}/adaptation_module_{it:06d}.jit"
+                    numbered_body_path = f"{path}/body_{it:06d}.jit"
+                    traced_script_adaptation_module.save(numbered_adaptation_path)
+                    traced_script_body_module.save(numbered_body_path)
+                    logger.upload_file(file_path=numbered_adaptation_path, target_path=f"checkpoints/", once=False)
+                    logger.upload_file(file_path=numbered_body_path, target_path=f"checkpoints/", once=False)
 
 
                 # upload files to wandb

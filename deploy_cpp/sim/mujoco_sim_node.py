@@ -13,8 +13,8 @@ Bridges MuJoCo physics simulation with the C++ deploy_node via ROS2 topics:
   - Publishes:  /joint_states       (JointState, for RViz visualization)
 
 Usage:
-  conda activate mujoco_sim
-  source /opt/ros/humble/setup.bash
+  conda activate robodog_gym
+  source /opt/ros/foxy/setup.bash
   python3 sim/mujoco_sim_node.py
 
   Or via launch:
@@ -108,6 +108,9 @@ class MujocoSimNode(Node):
         self.default_dof_pos = np.array(cfg['default_dof_pos'], dtype=np.float32)
         self.torque_limits = np.array(cfg['torque_limits'], dtype=np.float32)
         self.joint_transmission_ratio = np.array(cfg['joint_transmission_ratio'], dtype=np.float32)
+        self.terrain_mode = str(cfg.get('terrain_mode', 'flat')).lower()
+        if self.terrain_mode not in ('flat', 'stairs', 'stair'):
+            raise RuntimeError('terrain_mode must be flat or stairs')
         self.height_points_x = np.array(
             cfg.get('height_points_x',
                     [-0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5]),
@@ -132,6 +135,11 @@ class MujocoSimNode(Node):
         # Verify timestep
         assert abs(self.model.opt.timestep - self.sim_dt) < 1e-6, \
             f"XML timestep {self.model.opt.timestep} != expected {self.sim_dt}"
+
+        # The V3 XML contains a deterministic stair course. Keep it in the
+        # model so that flat and stair tests use the same robot/dynamics file;
+        # collision and visualization are toggled here from YAML.
+        self.stair_geom_ids = self._configure_terrain_geoms()
 
         # ---- Build joint index mapping ----
         # Map JOINT_NAMES to MuJoCo joint qpos/qvel indices
@@ -207,6 +215,7 @@ class MujocoSimNode(Node):
             f'  PD gains (DOF0): kp={self.target_kp[0]:.3f}, kd={self.target_kd[0]:.3f}')
         self.get_logger().info(
             f'  Height topic: {cfg.get("height_topic", "/height_measurements")} ({self.height_points_x.size}x{self.height_points_y.size})')
+        self.get_logger().info(f'  Terrain mode: {self.terrain_mode}')
 
     def cmd_callback(self, msg: Float32MultiArray):
         """Receive target joint positions from deploy_node."""
@@ -259,14 +268,113 @@ class MujocoSimNode(Node):
         """
         Return 77 positive distances from terrain to body height.
 
-        For the current flat-plane MuJoCo model, ground_z is 0 at every sample.
-        The C++ policy runner converts distance to the training observation with
-        clip(0.3 - distance, -1, 1) * 5.
+        Isaac Gym samples the 11x7 grid in the base-yaw frame and publishes
+        terrain_z - base_z to the observation code. The deployment bridge uses
+        the equivalent positive distance base_z - terrain_z, which is then
+        converted by the C++ runner to clip(0.3 - distance, -1, 1) * 5.
+
+        The MuJoCo stair geoms are axis-aligned boxes in world coordinates, so
+        their top surfaces can be sampled exactly without a ray-casting API.
         """
+        base_x = float(self.data.qpos[0])
+        base_y = float(self.data.qpos[1])
         base_z = float(self.data.qpos[2])
-        distances = np.full(self.height_points_x.size * self.height_points_y.size,
-                            base_z, dtype=np.float32)
-        return distances
+
+        # Training rotates height points by base yaw only, not roll/pitch.
+        w, x, y, z = self.data.qpos[3:7]
+        yaw = np.arctan2(2.0 * (w * z + x * y),
+                         1.0 - 2.0 * (y * y + z * z))
+        cy = np.cos(yaw)
+        sy = np.sin(yaw)
+        grid_x, grid_y = np.meshgrid(self.height_points_x,
+                                     self.height_points_y,
+                                     indexing='ij')
+        world_x = base_x + cy * grid_x - sy * grid_y
+        world_y = base_y + sy * grid_x + cy * grid_y
+
+        ground_z = np.zeros_like(world_x, dtype=np.float32)
+        for geom_id in self.stair_geom_ids:
+            center = self.model.geom_pos[geom_id]
+            half_size = self.model.geom_size[geom_id]
+            inside = (
+                (np.abs(world_x - center[0]) <= half_size[0]) &
+                (np.abs(world_y - center[1]) <= half_size[1])
+            )
+            top_z = np.float32(center[2] + half_size[2])
+            ground_z = np.where(inside, np.maximum(ground_z, top_z), ground_z)
+
+        return (base_z - ground_z).astype(np.float32).reshape(-1)
+
+    def _configure_terrain_geoms(self):
+        """Configure the reproducible stair course from YAML and return active IDs."""
+        requested_steps = int(self.cfg.get('stairs_num_steps', 8))
+        if requested_steps < 1:
+            raise RuntimeError('stairs_num_steps must be positive')
+
+        step_ids = []
+        for index in range(8):
+            geom_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, f'sim_stair_{index}')
+            if geom_id < 0:
+                break
+            step_ids.append(geom_id)
+        if requested_steps > len(step_ids):
+            raise RuntimeError(
+                f'XML contains {len(step_ids)} stair steps, '
+                f'but stairs_num_steps={requested_steps}')
+
+        top_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, 'sim_stair_top')
+        if top_id < 0:
+            raise RuntimeError('Stair geom "sim_stair_top" not found in MuJoCo XML')
+
+        enabled = self.terrain_mode in ('stairs', 'stair')
+        step_height = float(self.cfg.get('stairs_step_height', 0.08))
+        tread_depth = float(self.cfg.get('stairs_tread_depth', 0.30))
+        x_start = float(self.cfg.get('stairs_x_start', 0.55))
+        width = float(self.cfg.get('stairs_width', 2.0))
+        top_length = float(self.cfg.get('stairs_top_length', 0.90))
+        if min(step_height, tread_depth, width, top_length) <= 0:
+            raise RuntimeError('stair dimensions must be positive')
+
+        active_ids = []
+        for index, geom_id in enumerate(step_ids):
+            active = enabled and index < requested_steps
+            self.model.geom_contype[geom_id] = 1 if active else 0
+            self.model.geom_conaffinity[geom_id] = 1 if active else 0
+            self.model.geom_rgba[geom_id, 3] = 1.0 if active else 0.0
+            if active:
+                height = (index + 1) * step_height
+                self.model.geom_pos[geom_id] = (
+                    x_start + (index + 0.5) * tread_depth,
+                    0.0,
+                    0.5 * height,
+                )
+                self.model.geom_size[geom_id] = (
+                    0.5 * tread_depth,
+                    0.5 * width,
+                    0.5 * height,
+                )
+                active_ids.append(geom_id)
+
+        self.model.geom_contype[top_id] = 1 if enabled else 0
+        self.model.geom_conaffinity[top_id] = 1 if enabled else 0
+        self.model.geom_rgba[top_id, 3] = 1.0 if enabled else 0.0
+        if enabled:
+            top_height = requested_steps * step_height
+            self.model.geom_pos[top_id] = (
+                x_start + requested_steps * tread_depth + 0.5 * top_length,
+                0.0,
+                0.5 * top_height,
+            )
+            self.model.geom_size[top_id] = (
+                0.5 * top_length,
+                0.5 * width,
+                0.5 * top_height,
+            )
+            active_ids.append(top_id)
+
+        return active_ids
 
     @staticmethod
     def _rotate_vector_by_quat_inv(v, q):
@@ -410,13 +518,13 @@ def main():
 
     cfg_path = args.robot_config
     if not cfg_path:
-        cfg_path = os.path.join(pkg_dir, 'config', 'robots', 'mybot_v2_1_cse.yaml')
+        cfg_path = os.path.join(pkg_dir, 'config', 'robots', 'mybot_v3_cse_sim.yaml')
     if not os.path.exists(cfg_path):
         try:
             from ament_index_python.packages import get_package_share_directory
             pkg_share = get_package_share_directory('deploy_cpp')
             if not args.robot_config:
-                cfg_path = os.path.join(pkg_share, 'config', 'robots', 'mybot_v2_1_cse.yaml')
+                cfg_path = os.path.join(pkg_share, 'config', 'robots', 'mybot_v3_cse_sim.yaml')
         except Exception:
             pass
 

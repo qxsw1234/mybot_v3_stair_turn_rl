@@ -90,8 +90,11 @@ class LeggedRobot(BaseTask):
             self.torques = self._compute_torques(self.actions).view(self.torques.shape)
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
             self.gym.simulate(self.sim)
-            # if self.device == 'cpu':
-            self.gym.fetch_results(self.sim, True) # in legged_gym, only if self.device == 'cpu'
+            # The GPU tensor pipeline resolves dependencies when tensors are
+            # refreshed. An explicit blocking fetch is only required by the
+            # CPU pipeline and otherwise synchronizes four times per policy step.
+            if self.device == 'cpu':
+                self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
         self.post_physics_step()
 
@@ -255,6 +258,10 @@ class LeggedRobot(BaseTask):
         if self.cfg.terrain.curriculum:
             self.extras["train/episode"]["terrain_level"] = torch.mean(
                 self.terrain_levels[:self.num_train_envs].float())
+            if hasattr(self, "curriculum_progress_mean"):
+                self.extras["train/episode"]["curriculum_progress"] = self.curriculum_progress_mean
+                self.extras["train/episode"]["curriculum_stair_success"] = self.curriculum_stair_success_rate
+                self.extras["train/episode"]["curriculum_promotion_rate"] = self.curriculum_promotion_rate
         if self.cfg.commands.command_curriculum:
             self.extras["env_bins"] = torch.Tensor(self.env_command_bins)[:self.num_train_envs]
             if self.cfg.commands.num_commands > 3:
@@ -552,14 +559,14 @@ class LeggedRobot(BaseTask):
                                                      max_offset - min_offset) + min_offset
         if cfg.domain_rand.randomize_Kp_factor: # randomize motor gains, these are used in torque computation in every step. This is done OUTSIDE of isaac gym.
             min_Kp_factor, max_Kp_factor = cfg.domain_rand.Kp_factor_range
-            self.Kp_factors[env_ids, :] = torch.rand(len(env_ids), dtype=torch.float, device=self.device,
-                                                     requires_grad=False).unsqueeze(1) * (
-                                                  max_Kp_factor - min_Kp_factor) + min_Kp_factor
+            self.Kp_factors[env_ids, :] = torch.rand(
+                len(env_ids), self.num_dof, dtype=torch.float, device=self.device,
+                requires_grad=False) * (max_Kp_factor - min_Kp_factor) + min_Kp_factor
         if cfg.domain_rand.randomize_Kd_factor:
             min_Kd_factor, max_Kd_factor = cfg.domain_rand.Kd_factor_range
-            self.Kd_factors[env_ids, :] = torch.rand(len(env_ids), dtype=torch.float, device=self.device,
-                                                     requires_grad=False).unsqueeze(1) * (
-                                                  max_Kd_factor - min_Kd_factor) + min_Kd_factor
+            self.Kd_factors[env_ids, :] = torch.rand(
+                len(env_ids), self.num_dof, dtype=torch.float, device=self.device,
+                requires_grad=False) * (max_Kd_factor - min_Kd_factor) + min_Kd_factor
 
     def _process_rigid_body_props(self, props, env_id):
         self.default_body_mass = props[0].mass
@@ -657,7 +664,7 @@ class LeggedRobot(BaseTask):
             # only take into consideration envs where lin vel is above treshold
 
 
-            ep_len = self.episode_length_buf[env_ids]
+            ep_len = torch.clamp(self.episode_length_buf[env_ids], min=1)
             fast_env_thresh = 0.5 # linear xy velocity
             
             # fast_envs =  torch.sqrt((self.command_sums["abs_lin_vel_x_command"][env_ids]/ep_len)**2 + \
@@ -697,12 +704,159 @@ class LeggedRobot(BaseTask):
                             (lin_vel_y_residual > lin_vel_residual_leveldown_thresh) | \
                             (ang_vel_residual > ang_vel_residual_leveldown_thresh)
 
-            self.terrain_levels[env_ids] += 1 * (fast_envs & level_up_envs & torch.bitwise_not(self.early_termi_buf[env_ids]))  - 1 * (fast_envs & level_down_envs | self.early_termi_buf[env_ids])
+            # Tracking residual alone can promote a robot that stays near the
+            # spawn platform. Require physical progress, and on stair columns
+            # require the expected elevation change as evidence that it really
+            # traversed the stairs.
+            displacement_xy = (
+                self.root_states[env_ids, :2] - self.env_origins[env_ids, :2])
+            distance = torch.norm(displacement_xy, dim=1)
+            base_height = float(self.cfg.init_state.pos[2])
+            elevation_gain = self.root_states[env_ids, 2] - self.env_origins[env_ids, 2] - base_height
 
-            # Robots that solve the last level are sent to a random one
-            self.terrain_levels[env_ids] = torch.where(self.terrain_levels[env_ids]>=self.cfg.terrain.max_terrain_level,
-                                                    torch.randint_like(self.terrain_levels[env_ids], self.cfg.terrain.max_terrain_level),
-                                                    torch.clip(self.terrain_levels[env_ids], 0)) # (the minumum level is zero)
+            terrain_proportions = list(self.cfg.terrain.terrain_proportions)
+            stair_begin = float(sum(terrain_proportions[:2]))
+            stair_split = float(sum(terrain_proportions[:3]))
+            stair_end = float(sum(terrain_proportions[:4]))
+            terrain_choice = self.terrain_types[env_ids].float() / float(self.cfg.terrain.num_cols) + 0.001
+            stairs_up = (terrain_choice >= stair_begin) & (terrain_choice < stair_split)
+            stairs_down = (terrain_choice >= stair_split) & (terrain_choice < stair_end)
+            stair_envs = stairs_up | stairs_down
+
+            # Optional staircase-specialization thresholds.  General training
+            # keeps the historical defaults; dedicated fine-tuning runs can
+            # use slower, physically realistic stair commands without making
+            # those episodes ineligible for terrain promotion.
+            command_speed = torch.sqrt(lin_vel_x_cmd_avg**2 + lin_vel_y_cmd_avg**2)
+            stair_fast_thresh = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_fast_command_threshold', fast_env_thresh))
+            fast_envs = torch.where(
+                stair_envs, command_speed > stair_fast_thresh, fast_envs)
+
+            stair_levelup_lin_thresh = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_levelup_lin_vel_threshold',
+                lin_vel_residual_levelup_thresh))
+            stair_leveldown_lin_thresh = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_leveldown_lin_vel_threshold',
+                lin_vel_residual_leveldown_thresh))
+            stair_levelup_ang_thresh = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_levelup_ang_vel_threshold',
+                ang_vel_residual_levelup_thresh))
+            stair_leveldown_ang_thresh = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_leveldown_ang_vel_threshold',
+                ang_vel_residual_leveldown_thresh))
+            stair_level_up_envs = (
+                (lin_vel_x_residual < stair_levelup_lin_thresh) &
+                (lin_vel_y_residual < stair_levelup_lin_thresh) &
+                (ang_vel_residual < stair_levelup_ang_thresh))
+            stair_level_down_envs = (
+                (lin_vel_x_residual > stair_leveldown_lin_thresh) |
+                (lin_vel_y_residual > stair_leveldown_lin_thresh) |
+                (ang_vel_residual > stair_leveldown_ang_thresh))
+            level_up_envs = torch.where(stair_envs, stair_level_up_envs, level_up_envs)
+            level_down_envs = torch.where(stair_envs, stair_level_down_envs, level_down_envs)
+
+            regular_min_progress = float(getattr(
+                self.cfg.terrain, 'curriculum_min_progress', 1.0))
+            stair_min_progress = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_min_progress', 2.0))
+            # Euclidean distance incorrectly counts walking around a finite
+            # staircase as progress.  Ascending stairs are aligned with world
+            # +x, so require signed forward displacement there.
+            progress_measure = torch.where(
+                stair_envs, displacement_xy[:, 0], distance)
+            min_progress = torch.full_like(progress_measure, regular_min_progress)
+            min_progress = torch.where(
+                stair_envs,
+                torch.full_like(progress_measure, stair_min_progress),
+                min_progress)
+            progress_ok = progress_measure >= min_progress
+            stair_max_lateral = float(getattr(
+                self.cfg.terrain,
+                'curriculum_stair_max_lateral_displacement', float('inf')))
+            lateral_ok = torch.abs(displacement_xy[:, 1]) <= stair_max_lateral
+            progress_ok = progress_ok & ((~stair_envs) | lateral_ok)
+
+            stair_min_elevation = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_min_elevation', 0.06))
+            stair_min_elevation_by_env = torch.full_like(
+                elevation_gain, stair_min_elevation)
+            stair_min_elevation_steps = float(getattr(
+                self.cfg.terrain, 'curriculum_stair_min_elevation_steps', 0.0))
+            if stair_min_elevation_steps > 0.0:
+                configured_step_heights = getattr(
+                    self.cfg.terrain, 'sim2sim_stair_step_heights', None)
+                if configured_step_heights is not None:
+                    height_table = torch.as_tensor(
+                        configured_step_heights,
+                        dtype=elevation_gain.dtype,
+                        device=self.device)
+                    height_indices = torch.clamp(
+                        self.terrain_levels[env_ids],
+                        min=0,
+                        max=height_table.numel() - 1)
+                    step_height = height_table[height_indices]
+                else:
+                    difficulty = (
+                        self.terrain_levels[env_ids].float() /
+                        float(self.cfg.terrain.num_rows) *
+                        float(self.cfg.terrain.difficulty_scale))
+                    step_height = 0.05 + difficulty * (
+                        float(self.cfg.terrain.max_step_height) - 0.05)
+                stair_min_elevation_by_env = torch.maximum(
+                    stair_min_elevation_by_env,
+                    stair_min_elevation_steps * step_height)
+            elevation_ok = ((~stairs_up) | (elevation_gain >= stair_min_elevation_by_env)) & \
+                           ((~stairs_down) | (elevation_gain <= -stair_min_elevation_by_env))
+
+            not_terminated = torch.bitwise_not(self.early_termi_buf[env_ids])
+            promote = fast_envs & level_up_envs & progress_ok & elevation_ok & not_terminated
+            demote = self.early_termi_buf[env_ids] | \
+                     (fast_envs & (level_down_envs | ~progress_ok | ~elevation_ok))
+            self.terrain_levels[env_ids] += promote.to(torch.long) - demote.to(torch.long)
+
+            self.curriculum_progress_mean = progress_measure.mean()
+            if bool(stair_envs.any().item()):
+                self.curriculum_stair_success_rate = (
+                    progress_ok[stair_envs] & elevation_ok[stair_envs] &
+                    not_terminated[stair_envs]).float().mean()
+            else:
+                self.curriculum_stair_success_rate = torch.zeros((), device=self.device)
+            self.curriculum_promotion_rate = promote.float().mean()
+
+            # Dedicated fine-tuning runs may hold the curriculum inside a
+            # capability band.  Preserve the historical wraparound behavior
+            # when no explicit band is configured.
+            curriculum_min_level = int(getattr(
+                self.cfg.terrain, 'curriculum_min_terrain_level', 0))
+            configured_max_level = getattr(
+                self.cfg.terrain, 'curriculum_max_terrain_level', None)
+            if configured_max_level is None:
+                self.terrain_levels[env_ids] = torch.where(
+                    self.terrain_levels[env_ids] >= self.cfg.terrain.max_terrain_level,
+                    torch.randint_like(
+                        self.terrain_levels[env_ids],
+                        self.cfg.terrain.max_terrain_level),
+                    torch.clamp(
+                        self.terrain_levels[env_ids],
+                        min=curriculum_min_level))
+            else:
+                curriculum_max_level = min(
+                    int(configured_max_level),
+                    int(self.cfg.terrain.max_terrain_level) - 1)
+                curriculum_min_level = max(
+                    0, min(curriculum_min_level, curriculum_max_level))
+                self.terrain_levels[env_ids] = torch.clamp(
+                    self.terrain_levels[env_ids],
+                    min=curriculum_min_level,
+                    max=curriculum_max_level)
+                if bool(getattr(
+                        self.cfg.terrain,
+                        'curriculum_resample_within_band', False)):
+                    self.terrain_levels[env_ids] = torch.randint_like(
+                        self.terrain_levels[env_ids],
+                        low=curriculum_min_level,
+                        high=curriculum_max_level + 1)
             self.env_origins[env_ids] = self.terrain_origins[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
 
 
@@ -836,6 +990,35 @@ class LeggedRobot(BaseTask):
 
         # setting the smaller commands to zero
         # self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
+
+        # Dedicated high-stair fine tuning benefits from straight, attainable
+        # approach commands.  Keep this opt-in so the default mixed-terrain
+        # training and its command curriculum are unchanged.
+        if getattr(self.cfg.commands, 'terrain_conditioned_stair_commands', False):
+            terrain_proportions = list(self.cfg.terrain.terrain_proportions)
+            stair_begin = float(sum(terrain_proportions[:2]))
+            stair_end = float(sum(terrain_proportions[:4]))
+            terrain_choice = (
+                self.terrain_types[env_ids].float() /
+                float(self.cfg.terrain.num_cols) + 0.001)
+            stair_mask = (terrain_choice >= stair_begin) & (terrain_choice < stair_end)
+            stair_env_ids = env_ids[stair_mask]
+            if len(stair_env_ids) > 0:
+                forward_range = getattr(
+                    self.cfg.commands, 'stair_forward_command_range', [0.25, 0.45])
+                forward_min = float(forward_range[0])
+                forward_max = float(forward_range[1])
+                self.commands[stair_env_ids, 0] = forward_min + (
+                    forward_max - forward_min) * torch.rand(
+                        len(stair_env_ids), device=self.device)
+                lateral_limit = float(getattr(
+                    self.cfg.commands, 'stair_lateral_command_limit', 0.04))
+                yaw_limit = float(getattr(
+                    self.cfg.commands, 'stair_yaw_command_limit', 0.10))
+                self.commands[stair_env_ids, 1] = lateral_limit * (
+                    2.0 * torch.rand(len(stair_env_ids), device=self.device) - 1.0)
+                self.commands[stair_env_ids, 2] = yaw_limit * (
+                    2.0 * torch.rand(len(stair_env_ids), device=self.device) - 1.0)
 
         if self.cfg.commands.heading_command:
             # sample heading command in heading_range
@@ -1992,4 +2175,3 @@ class LeggedRobot(BaseTask):
         
         # Clamp negative values to foot_radius=0.02. This can happen especially because of the slope_treshold problem
         self.feet_height = torch.clamp(self.feet_height, min=0.02)
-

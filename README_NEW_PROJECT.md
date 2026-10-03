@@ -23,6 +23,12 @@ map. Its training curriculum covers:
 - Moderate friction, payload, center of mass, motor, sensor height map, gravity,
   and control delay randomization for later sim to real transfer.
 - Checkpoints every 250 iterations.
+- Headless training disables camera recording and per-step GPU-to-NumPy
+  telemetry copies; deployment and data collection keep telemetry enabled by
+  default.
+- GPU physics avoids blocking CPU-style result fetches between control
+  substeps, and curriculum plots are written with checkpoints instead of every
+  ten iterations.
 - New runs start from random weights. Continuation runs can load an explicit
   local checkpoint with `--resume-run` and `--checkpoint`.
 - Terrain difficulty advances from linear and angular velocity tracking error,
@@ -70,3 +76,22 @@ The main configuration entry point is
 
 The continuation uses the checkpoint number as its first global iteration and
 stores output in a separate `velocity_curriculum_resume_*` run directory.
+
+## View the trained policy on stairs
+
+The interactive stair viewer loads one checkpoint and fixes the environment to
+one ascending-stair difficulty level.  It does not modify the `.pt` weights;
+the first run also generates indexed JIT files beside the checkpoint.
+
+```bash
+source /home/ldl/anaconda3/etc/profile.d/conda.sh
+conda activate robodog_gym
+cd /home/ldl/mybot_v3_stair_turn_rl
+
+python -u scripts/view_stairs.py --iteration 37500 --level 8
+```
+
+`--level 4`, `--level 8`, and `--level 11` correspond to approximately 10.4,
+15.8, and 19.9 cm steps.  Use `--iteration 39250` to inspect the latest saved
+checkpoint.  In the viewer, `W/S` moves forward/backward, `A/D` moves laterally,
+`Q/E` turns, and the arrow keys apply pushes.

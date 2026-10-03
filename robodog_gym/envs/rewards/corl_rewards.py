@@ -57,6 +57,95 @@ class CoRLRewards:
         # Penalize z axis base linear velocity
         return torch.square(self.env.base_lin_vel[:, 2])
 
+    def _reward_stair_elevation_progress(self):
+        """Reward signed world-frame elevation progress on ascending stairs.
+
+        Using signed vertical velocity makes this a dense approximation of a
+        potential-based height reward: climbing earns reward while slipping
+        back down removes it.  Restricting it to ascending-stair columns keeps
+        flat-ground locomotion and descending stairs unchanged.
+        """
+        terrain_proportions = list(self.env.cfg.terrain.terrain_proportions)
+        stair_begin = float(sum(terrain_proportions[:2]))
+        stair_split = float(sum(terrain_proportions[:3]))
+        terrain_choice = (
+            self.env.terrain_types.float()
+            / float(self.env.cfg.terrain.num_cols)
+            + 0.001
+        )
+        stairs_up = (terrain_choice >= stair_begin) & (terrain_choice < stair_split)
+        max_abs_velocity = float(getattr(
+            self.env.cfg.rewards, "stair_elevation_velocity_clip", 1.0))
+        world_vertical_velocity = torch.clamp(
+            self.env.root_states[:self.env.num_envs, 9],
+            min=-max_abs_velocity,
+            max=max_abs_velocity,
+        )
+        return stairs_up.float() * world_vertical_velocity
+
+    def _reward_stair_lateral_drift(self):
+        """Penalize bypassing ascending stairs by drifting around them."""
+        terrain_proportions = list(self.env.cfg.terrain.terrain_proportions)
+        stair_begin = float(sum(terrain_proportions[:2]))
+        stair_split = float(sum(terrain_proportions[:3]))
+        terrain_choice = (
+            self.env.terrain_types.float()
+            / float(self.env.cfg.terrain.num_cols)
+            + 0.001
+        )
+        stairs_up = (terrain_choice >= stair_begin) & (terrain_choice < stair_split)
+        max_abs_displacement = float(getattr(
+            self.env.cfg.rewards, "stair_lateral_displacement_clip", 2.5))
+        lateral_displacement = torch.clamp(
+            self.env.root_states[:self.env.num_envs, 1]
+            - self.env.env_origins[:self.env.num_envs, 1],
+            min=-max_abs_displacement,
+            max=max_abs_displacement,
+        )
+        return stairs_up.float() * torch.square(lateral_displacement)
+
+    def _reward_stair_heading_drift(self):
+        """Penalize turning away from the world-x staircase direction."""
+        terrain_proportions = list(self.env.cfg.terrain.terrain_proportions)
+        stair_begin = float(sum(terrain_proportions[:2]))
+        stair_split = float(sum(terrain_proportions[:3]))
+        terrain_choice = (
+            self.env.terrain_types.float()
+            / float(self.env.cfg.terrain.num_cols)
+            + 0.001
+        )
+        stairs_up = (terrain_choice >= stair_begin) & (terrain_choice < stair_split)
+        forward = quat_apply(self.env.base_quat, self.env.forward_vec)
+        heading_error = torch.atan2(forward[:, 1], forward[:, 0])
+        return stairs_up.float() * torch.square(heading_error)
+
+    def _reward_stair_forward_progress(self):
+        """Reward signed progress along the matched staircase centreline.
+
+        Velocity tracking alone can settle into walking against the first
+        riser.  This potential-style term directly values forward displacement
+        and removes the reward again when the robot slides backwards.  The
+        lateral-drift penalty prevents collecting it by going around the
+        finite-width staircase.
+        """
+        terrain_proportions = list(self.env.cfg.terrain.terrain_proportions)
+        stair_begin = float(sum(terrain_proportions[:2]))
+        stair_split = float(sum(terrain_proportions[:3]))
+        terrain_choice = (
+            self.env.terrain_types.float()
+            / float(self.env.cfg.terrain.num_cols)
+            + 0.001
+        )
+        stairs_up = (terrain_choice >= stair_begin) & (terrain_choice < stair_split)
+        max_abs_velocity = float(getattr(
+            self.env.cfg.rewards, "stair_forward_velocity_clip", 1.0))
+        world_forward_velocity = torch.clamp(
+            self.env.root_states[:self.env.num_envs, 7],
+            min=-max_abs_velocity,
+            max=max_abs_velocity,
+        )
+        return stairs_up.float() * world_forward_velocity
+
     def _reward_ang_vel_xy(self):
         # Penalize xy axes base angular velocity
         return torch.sum(torch.square(self.env.base_ang_vel[:, :2]), dim=1)

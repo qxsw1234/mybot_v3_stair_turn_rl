@@ -74,7 +74,8 @@ height_measurement_scale: -1.0
 height_measurement_offset: 0.0
 action_scale: 0.25
 clip_obs: 100.0
-clip_actions: 20.0
+# Must match the exported CSE policy's training environment.
+clip_actions: 3.0
 require_imu_ready_for_rl: true
 height_sanity_check_enable: true
 gravity_norm_min: 0.8

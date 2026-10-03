@@ -89,3 +89,6 @@ build/
 install/
 .codex
 log/
+.codex_backups/
+*.bak_test
+*.before_*

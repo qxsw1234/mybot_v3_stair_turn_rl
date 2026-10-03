@@ -7,17 +7,17 @@
     <default>
         <default class="dog_v2">
             <geom contype="1" conaffinity="1" friction="0.6 0.3 0.3" rgba="0.5 0.6 0.7 1" margin="0.001" group="0" />
-            <joint armature="0.01" damping="0.5" frictionloss="0.0" />
+            <joint armature="0.01" damping="2" frictionloss="0.2" />
             <motor ctrlrange="-33.5 33.5" ctrllimited="true" />
             
             <default class="abduction">
-                <joint damping="0.5" />
+                <joint damping="1" />
             </default>
             <default class="thigh">
-                <joint damping="0.5" />
+                <joint damping="2" />
             </default>
             <default class="calf">
-                <joint damping="0.5" armature="0.0544" />
+                <joint damping="2" armature="0.0544" />
                 <motor gear="2.3333" />
             </default>
         </default>

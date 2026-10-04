@@ -9,6 +9,9 @@ Run from the project root, for example:
 
     python scripts/sim2sim_mujoco.py --headless --duration 5 --vx 0.2
     python scripts/sim2sim_mujoco.py --terrain-mode stairs --vx 0.2
+    python scripts/sim2sim_mujoco.py --terrain-mode three_stairs --interactive
+
+The three_stairs mode contains five parallel lanes: 8, 10, 12, 15, and 20 cm.
 """
 
 import argparse
@@ -31,6 +34,8 @@ HISTORY_LENGTH = 10
 POLICY_OBS_PER_STEP = 119
 ESTIMATOR_OBS_PER_STEP = 116
 MAX_STAIR_STEPS = 8
+THREE_STAIR_LANES = 5
+THREE_STAIR_STEPS = 10
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = PROJECT_ROOT / "deploy_cpp/config/robots/mybot_v3_cse_sim.yaml"
@@ -46,7 +51,11 @@ class KeyboardController:
 
         self.keyboard = keyboard
         self.keys = {
-            key: False for key in ("w", "s", "a", "d", "q", "e", "u", "o")
+            key: False
+            for key in (
+                "w", "s", "a", "d", "q", "e", "u", "o",
+                "1", "2", "3", "4", "5", "r",
+            )
         }
         self.special_keys = {
             key: False
@@ -124,6 +133,13 @@ class KeyboardController:
     def close(self):
         self.listener.stop()
 
+    def consume(self, name: str) -> bool:
+        """Consume a one-shot key such as a lane selector or reset."""
+        if self.keys.get(name, False):
+            self.keys[name] = False
+            return True
+        return False
+
 
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as file:
@@ -164,8 +180,8 @@ class MybotV3Sim:
                  terrain_mode: str, package_root: Path):
         self.config = config
         self.terrain_mode = terrain_mode.lower()
-        if self.terrain_mode not in ("flat", "stairs", "stair"):
-            raise ValueError("terrain mode must be flat or stairs")
+        if self.terrain_mode not in ("flat", "stairs", "stair", "three_stairs"):
+            raise ValueError("terrain mode must be flat, stairs, or three_stairs")
 
         if int(config.get("num_of_dofs", NUM_JOINTS)) != NUM_JOINTS:
             raise RuntimeError("this CSE policy expects exactly 12 DoFs")
@@ -213,6 +229,13 @@ class MybotV3Sim:
             config.get("kd_scale", 1.0))
         self.torque_limits = np.asarray(config["torque_limits"], dtype=np.float32)
         self.policy_dof_pos = np.asarray(config["policy_dof_pos"], dtype=np.float32)
+        self.action_lag_steps = int(config.get("action_lag_steps", 0))
+        if self.action_lag_steps < 0:
+            raise RuntimeError("action_lag_steps must be non-negative")
+        self.action_lag_buffer = [
+            np.zeros(NUM_JOINTS, dtype=np.float32)
+            for _ in range(self.action_lag_steps + 1)
+        ]
         self.lower = np.asarray(config["joint_pos_lower"], dtype=np.float32)
         self.upper = np.asarray(config["joint_pos_upper"], dtype=np.float32)
         self.joint_names = list(config["joint_names"])
@@ -319,77 +342,129 @@ class MybotV3Sim:
                 )
 
     def _configure_terrain(self):
-        requested_steps = int(self.config.get("stairs_num_steps", MAX_STAIR_STEPS))
-        if requested_steps < 1 or requested_steps > MAX_STAIR_STEPS:
-            raise RuntimeError(
-                f"stairs_num_steps must be in [1, {MAX_STAIR_STEPS}]"
-            )
-
-        step_ids = []
-        for index in range(MAX_STAIR_STEPS):
-            name = f"sim_stair_{index}"
-            geom_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_GEOM, name
-            )
-            if geom_id < 0:
+        def geom_id(name: str, required: bool = True) -> int:
+            value = int(mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, name))
+            if value < 0 and required:
                 raise RuntimeError(f"stair geom not found in MuJoCo XML: {name}")
-            step_ids.append(int(geom_id))
+            return value
 
-        top_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_GEOM, "sim_stair_top"
-        )
-        if top_id < 0:
-            raise RuntimeError("stair geom not found in MuJoCo XML: sim_stair_top")
+        def disable(value: int):
+            if value >= 0:
+                self.model.geom_contype[value] = 0
+                self.model.geom_conaffinity[value] = 0
+                self.model.geom_rgba[value, 3] = 0.0
 
-        enabled = self.terrain_mode in ("stairs", "stair")
-        step_height = float(self.config.get("stairs_step_height", 0.10))
-        tread_depth = float(self.config.get("stairs_tread_depth", 0.30))
-        x_start = float(self.config.get("stairs_x_start", 0.55))
-        width = float(self.config.get("stairs_width", 2.0))
-        top_length = float(self.config.get("stairs_top_length", 0.90))
+        def enable(value: int, position, size, friction: float):
+            self.model.geom_contype[value] = 1
+            self.model.geom_conaffinity[value] = 1
+            self.model.geom_rgba[value, 3] = 1.0
+            self.model.geom_friction[value, 0] = friction
+            self.model.geom_pos[value] = position
+            self.model.geom_size[value] = size
+
+        # Disable every generated stair first. This keeps the old one-lane
+        # terrain mode compatible while making the new three-lane mode explicit.
+        legacy_step_ids = [geom_id(f"sim_stair_{index}") for index in range(MAX_STAIR_STEPS)]
+        legacy_top_id = geom_id("sim_stair_top")
+        three_step_ids = [
+            geom_id(f"sim_three_stair_{index}")
+            for index in range(THREE_STAIR_LANES * THREE_STAIR_STEPS)
+        ]
+        three_top_ids = [
+            geom_id(f"sim_three_stair_top_{lane}")
+            for lane in range(THREE_STAIR_LANES)
+        ]
+        for value in legacy_step_ids + [legacy_top_id] + three_step_ids + three_top_ids:
+            disable(value)
+
+        if self.terrain_mode == "flat":
+            return []
+
         stair_friction = float(self.config.get("stairs_friction", 1.0))
-        if step_height <= 0 or tread_depth <= 0 or width <= 0 or top_length <= 0:
-            raise RuntimeError("stair dimensions must be positive")
+        if stair_friction <= 0:
+            raise RuntimeError("stairs_friction must be positive")
+
+        if self.terrain_mode in ("stairs", "stair"):
+            requested_steps = int(self.config.get("stairs_num_steps", MAX_STAIR_STEPS))
+            if requested_steps < 1 or requested_steps > MAX_STAIR_STEPS:
+                raise RuntimeError(
+                    f"stairs_num_steps must be in [1, {MAX_STAIR_STEPS}]"
+                )
+            step_height = float(self.config.get("stairs_step_height", 0.10))
+            tread_depth = float(self.config.get("stairs_tread_depth", 0.30))
+            x_start = float(self.config.get("stairs_x_start", 0.55))
+            width = float(self.config.get("stairs_width", 2.0))
+            top_length = float(self.config.get("stairs_top_length", 0.90))
+            if step_height <= 0 or tread_depth <= 0 or width <= 0 or top_length <= 0:
+                raise RuntimeError("stair dimensions must be positive")
+
+            active_ids = []
+            for index, value in enumerate(legacy_step_ids):
+                height = (index + 1) * step_height
+                if index < requested_steps:
+                    enable(
+                        value,
+                        (x_start + (index + 0.5) * tread_depth, 0.0, 0.5 * height),
+                        (0.5 * tread_depth, 0.5 * width, 0.5 * height),
+                        stair_friction,
+                    )
+                    active_ids.append(value)
+
+            top_height = requested_steps * step_height
+            enable(
+                legacy_top_id,
+                (x_start + requested_steps * tread_depth + 0.5 * top_length, 0.0,
+                 0.5 * top_height),
+                (0.5 * top_length, 0.5 * width, 0.5 * top_height),
+                stair_friction,
+            )
+            active_ids.append(legacy_top_id)
+            return active_ids
+
+        num_steps = int(self.config.get("three_stairs_num_steps", THREE_STAIR_STEPS))
+        if num_steps != THREE_STAIR_STEPS:
+            raise RuntimeError(f"three_stairs_num_steps must be {THREE_STAIR_STEPS}")
+        step_heights = [float(value) for value in self.config.get(
+            "three_stairs_step_heights", [0.08, 0.10, 0.12]
+        )]
+        lane_y = [float(value) for value in self.config.get(
+            "three_stairs_lane_y", [-2.6, 0.0, 2.6, 5.2, 7.8]
+        )]
+        if len(step_heights) != THREE_STAIR_LANES or len(lane_y) != THREE_STAIR_LANES:
+            raise RuntimeError("three_stairs_step_heights and three_stairs_lane_y need 5 values")
+        if any(value <= 0 for value in step_heights):
+            raise RuntimeError("three_stairs_step_heights must be positive")
+        tread_depth = float(self.config.get("three_stairs_tread_depth", 0.30))
+        x_start = float(self.config.get("three_stairs_x_start", 0.55))
+        width = float(self.config.get("three_stairs_width", 2.0))
+        top_length = float(self.config.get("three_stairs_top_length", 0.90))
+        if tread_depth <= 0 or width <= 0 or top_length <= 0:
+            raise RuntimeError("three-stair dimensions must be positive")
 
         active_ids = []
-        for index, geom_id in enumerate(step_ids):
-            active = enabled and index < requested_steps
-            self.model.geom_contype[geom_id] = 1 if active else 0
-            self.model.geom_conaffinity[geom_id] = 1 if active else 0
-            self.model.geom_rgba[geom_id, 3] = 1.0 if active else 0.0
-            if active:
-                self.model.geom_friction[geom_id, 0] = stair_friction
+        for lane in range(THREE_STAIR_LANES):
+            step_height = step_heights[lane]
+            for index in range(THREE_STAIR_STEPS):
+                value = three_step_ids[lane * THREE_STAIR_STEPS + index]
                 height = (index + 1) * step_height
-                self.model.geom_pos[geom_id] = (
-                    x_start + (index + 0.5) * tread_depth,
-                    0.0,
-                    0.5 * height,
+                enable(
+                    value,
+                    (x_start + (index + 0.5) * tread_depth, lane_y[lane], 0.5 * height),
+                    (0.5 * tread_depth, 0.5 * width, 0.5 * height),
+                    stair_friction,
                 )
-                self.model.geom_size[geom_id] = (
-                    0.5 * tread_depth,
-                    0.5 * width,
-                    0.5 * height,
-                )
-                active_ids.append(geom_id)
+                active_ids.append(value)
 
-        top_active = enabled
-        self.model.geom_contype[top_id] = 1 if top_active else 0
-        self.model.geom_conaffinity[top_id] = 1 if top_active else 0
-        self.model.geom_rgba[top_id, 3] = 1.0 if top_active else 0.0
-        if top_active:
-            self.model.geom_friction[top_id, 0] = stair_friction
-            top_height = requested_steps * step_height
-            self.model.geom_pos[top_id] = (
-                x_start + requested_steps * tread_depth + 0.5 * top_length,
-                0.0,
-                0.5 * top_height,
+            top_height = THREE_STAIR_STEPS * step_height
+            top_id = three_top_ids[lane]
+            enable(
+                top_id,
+                (x_start + THREE_STAIR_STEPS * tread_depth + 0.5 * top_length,
+                 lane_y[lane], 0.5 * top_height),
+                (0.5 * top_length, 0.5 * width, 0.5 * top_height),
+                stair_friction,
             )
-            self.model.geom_size[top_id] = (
-                0.5 * top_length,
-                0.5 * width,
-                0.5 * top_height,
-            )
-            active_ids.append(int(top_id))
+            active_ids.append(top_id)
 
         return active_ids
 
@@ -403,6 +478,48 @@ class MybotV3Sim:
             [self.data.qvel[index] for index in self.joint_qvel_idx], dtype=np.float32
         )
 
+    def teleport(self, x: float, y: float, yaw: float = 0.0):
+        """Reset the robot to its standing pose at a chosen test lane."""
+        mujoco.mj_resetData(self.model, self.data)
+        self.data.qpos[0:3] = (x, y, 0.35)
+        half = 0.5 * yaw
+        self.data.qpos[3:7] = (np.cos(half), 0.0, 0.0, np.sin(half))
+        for index, qpos_index in enumerate(self.joint_qpos_idx):
+            self.data.qpos[qpos_index] = self.policy_dof_pos[index]
+        self.data.qvel[:] = 0.0
+        self.data.ctrl[:] = 0.0
+        self.data.xfrc_applied[:] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+        self.policy_history.zero_()
+        self.estimator_history.zero_()
+        self.last_actions.zero_()
+        self.action_lag_buffer = [
+            np.zeros(NUM_JOINTS, dtype=np.float32)
+            for _ in range(self.action_lag_steps + 1)
+        ]
+        self.infer_count = 0
+        self.initial_base = np.asarray(self.data.qpos[:3], dtype=np.float32).copy()
+        self.min_base_z = float(self.data.qpos[2])
+        self.max_base_z = float(self.data.qpos[2])
+        self.max_tilt_rad = 0.0
+        self.action_abs_sum = 0.0
+        self.action_saturated_count = 0
+        self.action_value_count = 0
+        self.fell = False
+
+    def _ground_height_at(self, wx: np.ndarray, wy: np.ndarray) -> np.ndarray:
+        gz = np.zeros_like(wx, dtype=np.float32)
+        for geom_id in self.stair_geom_ids:
+            center = self.model.geom_pos[geom_id]
+            half_size = self.model.geom_size[geom_id]
+            inside = (
+                (np.abs(wx - center[0]) <= half_size[0])
+                & (np.abs(wy - center[1]) <= half_size[1])
+            )
+            top_z = np.float32(center[2] + half_size[2])
+            gz = np.where(inside, np.maximum(gz, top_z), gz)
+        return gz
+
     def height_distances(self) -> np.ndarray:
         base_x, base_y, base_z = self.data.qpos[:3]
         w, x, y, z = self.data.qpos[3:7]
@@ -412,16 +529,21 @@ class MybotV3Sim:
         world_x = base_x + cy * grid_x - sy * grid_y
         world_y = base_y + sy * grid_x + cy * grid_y
 
-        ground_z = np.zeros_like(world_x, dtype=np.float32)
-        for geom_id in self.stair_geom_ids:
-            center = self.model.geom_pos[geom_id]
-            half_size = self.model.geom_size[geom_id]
-            inside = (
-                (np.abs(world_x - center[0]) <= half_size[0])
-                & (np.abs(world_y - center[1]) <= half_size[1])
-            )
-            top_z = np.float32(center[2] + half_size[2])
-            ground_z = np.where(inside, np.maximum(ground_z, top_z), ground_z)
+        # Match training: heightmap grid + min-of-3 sampling (horiz_scale=0.1, border=25)
+        HS = 0.1
+        BORDER = 25.0
+        ix = np.floor((world_x + BORDER) / HS).astype(np.int64)
+        iy = np.floor((world_y + BORDER) / HS).astype(np.int64)
+
+        def _h_at_grid(gx, gy):
+            wx = gx * HS - BORDER
+            wy = gy * HS - BORDER
+            return self._ground_height_at(wx, wy)
+
+        h1 = _h_at_grid(ix, iy)
+        h2 = _h_at_grid(ix + 1, iy)
+        h3 = _h_at_grid(ix, iy + 1)
+        ground_z = np.minimum(np.minimum(h1, h2), h3)
         return (base_z - ground_z).astype(np.float32).reshape(-1)
 
     def _observations(self, command: np.ndarray):
@@ -488,6 +610,12 @@ class MybotV3Sim:
         )
         self.action_value_count += NUM_JOINTS
         return action_np
+
+    def target_from_action(self, action: np.ndarray, action_scale: float) -> np.ndarray:
+        """Apply the same delayed position-target queue used during training."""
+        scaled_action = np.asarray(action, dtype=np.float32) * float(action_scale)
+        self.action_lag_buffer = self.action_lag_buffer[1:] + [scaled_action.copy()]
+        return self.policy_dof_pos + self.action_lag_buffer[0]
 
     def step_control(
         self, target: np.ndarray, external_force: Optional[np.ndarray] = None
@@ -584,7 +712,7 @@ def run(args):
     if args.interactive:
         try:
             disturbance_force_n = (
-                float(config.get("external_force_n", 35.0))
+                float(config.get("external_force_n", 0.0))
                 if args.disturbance_force is None
                 else float(args.disturbance_force)
             )
@@ -601,7 +729,8 @@ def run(args):
         command = np.zeros(3, dtype=np.float32)
         print(
             "[sim2sim] keyboard: W/S forward, A/D lateral, Q/E yaw; "
-            f"arrows external force={disturbance_force_n:.1f} N, U/O vertical force"
+            f"arrows external force={disturbance_force_n:.1f} N, U/O vertical force; "
+            "1/2/3/4/5 select 8/10/12/15/20 cm lanes, R reset"
         )
     else:
         command = np.array([args.vx, args.vy, args.yaw], dtype=np.float32)
@@ -611,13 +740,33 @@ def run(args):
         f"dt={config['dt']} decimation={config['decimation']} "
         f"policy_profile={args.policy_profile}"
     )
+    if terrain_mode == "three_stairs":
+        print(
+            "[sim2sim] stair lanes: "
+            f"y={config.get('three_stairs_lane_y', [-2.6, 0.0, 2.6, 5.2, 7.8])}, "
+            f"step_heights_m={config.get('three_stairs_step_heights', [0.08, 0.10, 0.12, 0.15, 0.20])}, "
+            f"steps_each={config.get('three_stairs_num_steps', THREE_STAIR_STEPS)}"
+        )
 
     def tick(step_count):
         if controller is not None:
+            if controller.consume("r"):
+                sim.teleport(0.0, 0.0)
+                print("[sim2sim] reset to origin")
+            lane_y = config.get(
+                "three_stairs_lane_y", [-2.6, 0.0, 2.6, 5.2, 7.8]
+            )
+            for lane_index, key in enumerate(("1", "2", "3", "4", "5")):
+                if controller.consume(key):
+                    sim.teleport(0.0, float(lane_y[lane_index]))
+                    print(
+                        f"[sim2sim] teleport to lane {key} "
+                        f"({config.get('three_stairs_step_heights')[lane_index] * 100:.0f} cm, "
+                        f"y={float(lane_y[lane_index]):+.1f})"
+                    )
             command[:] = controller.command()
         action = sim.infer(command)
-        target = sim.policy_dof_pos + action * float(config["action_scale"])
-        target = np.clip(target, sim.lower, sim.upper)
+        target = sim.target_from_action(action, float(config["action_scale"]))
         disturbance = (
             controller.disturbance()
             if controller is not None
@@ -688,7 +837,9 @@ def main():
         default="config",
         help="override control normalization for a compatible older policy",
     )
-    parser.add_argument("--terrain-mode", choices=("flat", "stairs"), default=None)
+    parser.add_argument(
+        "--terrain-mode", choices=("flat", "stairs", "three_stairs"), default=None
+    )
     parser.add_argument("--stairs-step-height", type=float, default=None)
     parser.add_argument("--stairs-tread-depth", type=float, default=None)
     parser.add_argument("--stairs-width", type=float, default=None)

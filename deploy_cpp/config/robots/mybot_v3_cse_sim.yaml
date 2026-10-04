@@ -1,7 +1,9 @@
 # MyBot V3 CSE sim2sim configuration.
-# Active policy: ac_weights_059000.pt from
-# runs/mybot_v3_stair_turn_improved_resume_040500/2026-10-02_03-23-39.173775.
-# The two files below are the TorchScript export of that checkpoint.
+# Selected MuJoCo checkpoint for the interactive three-lane test:
+# ac_weights_059950.pt from
+# runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780.
+# It tied the best validated MuJoCo score and is the latest checkpoint among
+# the tied candidates. The two files are its TorchScript exports.
 # All 12-element arrays use policy DOF order:
 #   FL hip/thigh/calf, FR hip/thigh/calf,
 #   RL hip/thigh/calf, RR hip/thigh/calf.
@@ -73,6 +75,8 @@ nominal_base_height: 0.34
 height_measurement_scale: 1.0
 height_measurement_offset: 0.0
 action_scale: 0.25
+# Phase3B trains with a two-policy-step action-target delay (40 ms).
+action_lag_steps: 2
 clip_obs: 100.0
 # Must match train_mybot_v3_stair_turn.py: actions are clipped to [-3, 3].
 clip_actions: 3.0
@@ -87,7 +91,8 @@ height_distance_max: 1.2
 cmd_deadband: 0.05
 # Interactive sim2sim disturbance magnitude. Hold arrow keys to apply this
 # world-frame force to the base body; U/O apply it vertically.
-external_force_n: 35.0
+# Keep interactive sim2sim unassisted unless a disturbance is requested.
+external_force_n: 0.0
 standup_duration: 2.0
 kd_damp_motor: 0.1
 
@@ -120,5 +125,16 @@ stairs_tread_depth: 0.30
 stairs_width: 2.0
 stairs_num_steps: 8
 stairs_top_length: 0.90
+
+# Five parallel test lanes for interactive sim2sim. Each lane has ten steps;
+# heights are 8 cm, 10 cm, 12 cm, 15 cm, and 20 cm respectively.
+three_stairs_x_start: 0.55
+three_stairs_tread_depth: 0.30
+three_stairs_width: 2.0
+three_stairs_num_steps: 10
+three_stairs_top_length: 0.90
+three_stairs_lane_y: [-2.6, 0.0, 2.6, 5.2, 7.8]
+three_stairs_step_heights: [0.08, 0.10, 0.12, 0.15, 0.20]
+
 fall_base_height: 0.15
 fall_tilt_deg: 65.0

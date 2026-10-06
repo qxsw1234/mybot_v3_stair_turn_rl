@@ -183,6 +183,64 @@ def settle(sim, seconds, viewer=None):
             viewer.sync()
 
 
+class AutoStandController:
+    """Blend between the locomotion policy and a quiet nominal PD stand."""
+
+    def __init__(self, nominal, control_dt, deadband, delay, blend_seconds):
+        self.nominal = np.asarray(nominal, dtype=np.float32).copy()
+        self.control_dt = float(control_dt)
+        self.deadband = float(deadband)
+        self.delay = max(0.0, float(delay))
+        self.blend_seconds = max(self.control_dt, float(blend_seconds))
+        self.reset()
+
+    def reset(self):
+        # Start quietly.  There is no reason to run the gait policy before the
+        # user has issued the first motion command.
+        self.standing = True
+        self.idle_seconds = self.delay
+        self.blend_elapsed = self.blend_seconds
+        self.transition_from = self.nominal.copy()
+        self.applied_target = self.nominal.copy()
+
+    def update_mode(self, command):
+        """Update command-idle timing and return a mode-change label."""
+        moving = float(np.linalg.norm(command)) > self.deadband
+        if moving:
+            self.idle_seconds = 0.0
+            if self.standing:
+                self.standing = False
+                self.transition_from = self.applied_target.copy()
+                self.blend_elapsed = 0.0
+                return "policy"
+            return None
+
+        if self.standing:
+            return None
+        self.idle_seconds += self.control_dt
+        if self.idle_seconds + 1e-9 >= self.delay:
+            self.standing = True
+            self.transition_from = self.applied_target.copy()
+            self.blend_elapsed = 0.0
+            return "stand"
+        return None
+
+    def blend_target(self, desired):
+        """Cubic-smooth a newly selected controller into the applied target."""
+        desired = np.asarray(desired, dtype=np.float32)
+        if self.blend_elapsed < self.blend_seconds:
+            self.blend_elapsed = min(
+                self.blend_seconds, self.blend_elapsed + self.control_dt
+            )
+            alpha = self.blend_elapsed / self.blend_seconds
+            alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+            target = (1.0 - alpha) * self.transition_from + alpha * desired
+        else:
+            target = desired
+        self.applied_target = np.asarray(target, dtype=np.float32).copy()
+        return self.applied_target
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -196,6 +254,23 @@ def build_parser():
     parser.add_argument("--yaw-rate", type=float, default=None)
     parser.add_argument("--action-scale", type=float, default=None)
     parser.add_argument("--disturbance-force", type=float, default=None)
+    parser.add_argument(
+        "--stand-delay",
+        type=float,
+        default=0.20,
+        help="seconds at zero command before switching to quiet PD stand",
+    )
+    parser.add_argument(
+        "--stand-blend",
+        type=float,
+        default=0.35,
+        help="seconds used to blend between policy and quiet stand",
+    )
+    parser.add_argument(
+        "--disable-auto-stand",
+        action="store_true",
+        help="always apply the locomotion policy, including at zero command",
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
         "--headless-command",
@@ -239,16 +314,55 @@ def main():
     total_steps = max(1, int(args.duration / sim.control_dt))
     selected_spawn = args.spawn
     controller = None
+    auto_stand = None
+    if not args.disable_auto_stand:
+        auto_stand = AutoStandController(
+            sim.policy_dof_pos,
+            sim.control_dt,
+            float(config.get("cmd_deadband", 0.05)),
+            args.stand_delay,
+            args.stand_blend,
+        )
+
+    def control_step(command, disturbance=None, announce=False):
+        mode_change = auto_stand.update_mode(command) if auto_stand else None
+        if announce and mode_change == "stand":
+            print("[robocon] 自动站立: 固定关节目标，停止步态策略输出")
+        elif announce and mode_change == "policy":
+            print("[robocon] 运动控制: 平滑切回 RL 策略")
+
+        if auto_stand is not None and auto_stand.standing:
+            # Keep recurrent histories current without evaluating or counting
+            # a gait action that is not physically applied.  Recording zero as
+            # the previous action makes the next hand-off match the held pose.
+            sim.last_actions.zero_()
+            policy_step, estimator_step = sim._observations(
+                np.zeros(3, dtype=np.float32)
+            )
+            sim.policy_history[:-1].copy_(sim.policy_history[1:].clone())
+            sim.policy_history[-1].copy_(policy_step[0])
+            sim.estimator_history[:-1].copy_(sim.estimator_history[1:].clone())
+            sim.estimator_history[-1].copy_(estimator_step[0])
+            sim.infer_count += 1
+            sim.action_lag_buffer = [
+                np.zeros(12, dtype=np.float32)
+                for _ in range(sim.action_lag_steps + 1)
+            ]
+            desired = sim.policy_dof_pos
+        else:
+            action = sim.infer(command)
+            desired = np.clip(
+                sim.target_from_action(action, action_scale), sim.lower, sim.upper
+            )
+        target = auto_stand.blend_target(desired) if auto_stand else desired
+        sim.step_control(target, disturbance)
+        return mode_change
 
     if args.headless:
         command = np.asarray(args.headless_command, dtype=np.float32)
         settle(sim, min(0.8, args.duration * 0.25))
         for step in range(total_steps):
-            action = sim.infer(command)
-            target = np.clip(
-                sim.target_from_action(action, action_scale), sim.lower, sim.upper
-            )
-            sim.step_control(target)
+            control_step(command)
             if step % 50 == 0:
                 print(
                     f"[robocon] step={step} xyz="
@@ -280,6 +394,11 @@ def main():
             f"[robocon] 方向键施加 {disturbance_force:.1f}N 水平扰动, "
             "U/O 施加竖直扰动"
         )
+        if auto_stand is not None:
+            print(
+                f"[robocon] 自动站立已启用: 松键 {args.stand_delay:.2f}s 后进入, "
+                f"切换平滑时间 {args.stand_blend:.2f}s"
+            )
         try:
             with mujoco.viewer.launch_passive(sim.model, sim.data) as viewer:
                 viewer.cam.lookat[:] = sim.data.qpos[:3]
@@ -293,19 +412,19 @@ def main():
                     start_time = time.time()
                     if controller.consume("r"):
                         teleport_to(sim, selected_spawn)
+                        if auto_stand is not None:
+                            auto_stand.reset()
                     for key, spawn_name in SPAWN_KEYS.items():
                         if controller.consume(key):
                             selected_spawn = spawn_name
                             teleport_to(sim, selected_spawn)
+                            if auto_stand is not None:
+                                auto_stand.reset()
 
                     command = controller.command()
-                    action = sim.infer(command)
-                    target = np.clip(
-                        sim.target_from_action(action, action_scale),
-                        sim.lower,
-                        sim.upper,
+                    control_step(
+                        command, controller.disturbance(), announce=True
                     )
-                    sim.step_control(target, controller.disturbance())
                     viewer.cam.lookat[:] = sim.data.qpos[:3]
                     viewer.sync()
                     if step % 100 == 0:

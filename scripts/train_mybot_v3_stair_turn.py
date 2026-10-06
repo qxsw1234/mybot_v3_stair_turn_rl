@@ -15,6 +15,7 @@ def train_mybot_v3_stair_turn(
     preview=False,
     resume_run=None,
     checkpoint=-1,
+    robocon_obstacle="mixed",
 ):
 
     import isaacgym
@@ -375,6 +376,103 @@ def train_mybot_v3_stair_turn(
     # Cfg.terrain.horizontal_scale = 0.1 #0.1 resolution of gridmap
      
 
+
+    # ==================================================================
+    # ROBOCON obstacle terrain (reference: robocon_reference/RC_WheelLeg)
+    # ------------------------------------------------------------------
+    # Phase switch:
+    #   "mixed"  -> keep the default mixed terrain curriculum above
+    #   "stairs" -> single ROBOCON staircase family, geometry matched to the
+    #               competition T-stairs (step_height ~0.10 m)
+    # Extra obstacles (low bar / gap bridge / ramp) will be added here as
+    # their generators land; see robocon_reference/.../competition_terrains.py.
+    # ==================================================================
+    Cfg.terrain.robocon_obstacle = robocon_obstacle
+
+    if Cfg.terrain.robocon_obstacle == "stairs":
+        # ROBOCON competition staircase: identical geometry to the MuJoCo
+        # reference. Tread depth 0.30 m, ladder width 2.0 m, 8 risers,
+        # 0.90 m top landing, first riser 0.55 m in front of the spawn.
+        Cfg.terrain.sim2sim_straight_stairs = True
+        Cfg.terrain.sim2sim_stair_start_offset = 0.55
+        Cfg.terrain.sim2sim_stair_tread_depth = 0.30
+        Cfg.terrain.sim2sim_stair_width = 2.0
+        Cfg.terrain.sim2sim_stair_num_steps = 8
+        Cfg.terrain.sim2sim_stair_top_length = 0.90
+
+        # Competition step height is 0.10 m. For RL we widen the *per-step*
+        # height and co-vary it with the terrain row (curriculum index), so
+        # lower rows teach a smaller riser and the top rows slightly exceed
+        # the competition spec. Index i (terrain row) drives the height table
+        # consumed by Terrain.make_terrain and the stair-elevation promotion
+        # rule in legged_robot._update_terrain_curriculum.
+        step_h_min = 0.06   # easiest riser
+        step_h_max = 0.14   # hardest riser (competition = 0.10)
+        num_levels = Cfg.terrain.num_rows
+        if num_levels > 1:
+            step_heights = [
+                step_h_min + (step_h_max - step_h_min) * i / (num_levels - 1)
+                for i in range(num_levels)
+            ]
+        else:
+            step_heights = [step_h_max]
+        # Guarantee the exact competition riser is a selectable level.
+        step_heights[num_levels // 2] = 0.10
+        Cfg.terrain.sim2sim_stair_step_heights = step_heights
+
+        # Train only on the staircase family; disable the mixed curriculum rows.
+        Cfg.terrain.terrain_proportions = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+        # Stair-aware promotion: require real forward progress and ~6 risers
+        # of elevation gain before a robot levels up.
+        Cfg.terrain.curriculum_stair_min_progress = 2.80
+        Cfg.terrain.curriculum_stair_min_elevation = 0.06
+        Cfg.terrain.curriculum_stair_min_elevation_steps = 6.0
+
+    elif Cfg.terrain.robocon_obstacle == "low_bar":
+        # ROBOCON low-bar (限高杆 / 矮门): flat ground + a real collision
+        # gate (cross-bar + two posts) placed inside each env.  The bar CANNOT
+        # be faked with the 2.5D heightfield, so it is a fixed-base, gravity-
+        # free actor that the robot collides with.
+        Cfg.terrain.robocon_low_bar = True
+        # Flat ground everywhere: index 6 = "empty" leaves the height field at 0.
+        Cfg.terrain.terrain_proportions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        Cfg.terrain.low_bar_clearance_min = 0.25       # hardest row (lowest bar)
+        Cfg.terrain.low_bar_clearance_max = 0.35       # easiest row (highest bar)
+        Cfg.terrain.low_bar_target_clearance = 0.30    # ROBOCON competition spec
+        Cfg.terrain.low_bar_width = 1.0
+        Cfg.terrain.low_bar_thickness = 0.05
+        Cfg.terrain.low_bar_x = 2.0                    # bar ~2 m ahead of spawn
+
+        # Difficulty = terrain row, in the OPPOSITE direction to the stairs:
+        # row 0 = highest bar (0.35 m, easiest) ... last row = lowest (0.25 m).
+        # Force the middle row to the exact competition clearance.
+        lb_min = Cfg.terrain.low_bar_clearance_min
+        lb_max = Cfg.terrain.low_bar_clearance_max
+        lb_levels = Cfg.terrain.num_rows
+        if lb_levels > 1:
+            lb_table = [lb_max + (lb_min - lb_max) * i / (lb_levels - 1)
+                        for i in range(lb_levels)]
+        else:
+            lb_table = [lb_max]
+        lb_table[lb_levels // 2] = Cfg.terrain.low_bar_target_clearance
+        Cfg.terrain.robocon_low_bar_clearance_by_level = lb_table
+
+        # The policy must be able to SEE the overhead bar (the downward height
+        # scanner cannot): append a body-frame bar observation to policy and
+        # estimator (must be in both -- estimator activity is keyed on the
+        # policy component list).  Widths auto-recompute in Observations.__init__.
+        Cfg.env.policy_observation_components.append(['obstacle_ahead', 3, True])
+        Cfg.env.estimator_observation_components.append(['obstacle_ahead', 3, True])
+
+        # Keep the bar observation clean: the default noise scale is 1.0 m
+        # (noise_level == 1.0), which would swamp a ~3 m signal.
+        Cfg.noise_scales.obstacle_ahead = 0.0
+
+        # Reward shaping: encourage ducking while the bar is still ahead.
+        Cfg.reward_scales.low_bar_crouch = 1.0
+
+
     # original RSL plane
     # Cfg.terrain.mesh_type = 'plane'
     # Cfg.terrain.teleport_robots = False # else gives error for plane
@@ -636,6 +734,8 @@ if __name__ == '__main__':
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--resume-run", type=str, default=None)
     parser.add_argument("--checkpoint", type=int, default=-1)
+    parser.add_argument("--robocon-obstacle", choices=["mixed", "stairs", "low_bar"],
+                        default="mixed")
     parser.add_argument("--headless", dest="headless", action="store_true")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.set_defaults(headless=True)
@@ -725,4 +825,5 @@ if __name__ == '__main__':
         preview=args.preview,
         resume_run=args.resume_run,
         checkpoint=args.checkpoint,
+        robocon_obstacle=args.robocon_obstacle,
     )

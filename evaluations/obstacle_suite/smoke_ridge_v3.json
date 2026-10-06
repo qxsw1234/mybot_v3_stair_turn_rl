@@ -1,0 +1,129 @@
+{
+  "checkpoint": "059950",
+  "profile": "aligned_damped",
+  "mode": "nominal",
+  "seed": 7,
+  "max_move_seconds": 25.0,
+  "obstacles": {
+    "ridge_slope": {
+      "aggregate": {
+        "trials": 3,
+        "successes": 3,
+        "success_rate_percent": 100.0,
+        "failure_reasons": {
+          "success": 3
+        },
+        "mean_max_tilt_deg": 14.5,
+        "mean_action_saturation_percent": 15.7,
+        "mean_dx_face1_m": 1.203,
+        "mean_dx_face2_m": 1.143
+      },
+      "records": [
+        {
+          "obstacle": "ridge_slope",
+          "success": true,
+          "reason": "success",
+          "dx_face1_m": 1.203,
+          "dx_face2_m": 1.143,
+          "crossed_ridge": true,
+          "yaw_after_phase1_deg": -4.0,
+          "on_slope_fraction_face1": 0.995,
+          "on_slope_fraction_face2": 1.0,
+          "final_base_xyz": [
+            0.9030097190041376,
+            -0.7909616844005387,
+            0.3816474063386733
+          ],
+          "initial_stand_joint_velocity_rms": 0.06729895621538162,
+          "final_stand_joint_velocity_rms": 0.013292896561324596,
+          "max_tilt_deg": 14.506684821104256,
+          "mean_abs_action": 1.3864367702821514,
+          "action_saturation_fraction": 0.15663322185061315,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 0.85,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.35,
+            "command_vy_mps": 0.3
+          }
+        },
+        {
+          "obstacle": "ridge_slope",
+          "success": true,
+          "reason": "success",
+          "dx_face1_m": 1.203,
+          "dx_face2_m": 1.143,
+          "crossed_ridge": true,
+          "yaw_after_phase1_deg": -4.0,
+          "on_slope_fraction_face1": 0.995,
+          "on_slope_fraction_face2": 1.0,
+          "final_base_xyz": [
+            0.9030097190041376,
+            -0.7909616844005387,
+            0.3816474063386733
+          ],
+          "initial_stand_joint_velocity_rms": 0.06729895621538162,
+          "final_stand_joint_velocity_rms": 0.013292896561324596,
+          "max_tilt_deg": 14.506684821104256,
+          "mean_abs_action": 1.3864367702821514,
+          "action_saturation_fraction": 0.15663322185061315,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 0.85,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.35,
+            "command_vy_mps": 0.3
+          }
+        },
+        {
+          "obstacle": "ridge_slope",
+          "success": true,
+          "reason": "success",
+          "dx_face1_m": 1.203,
+          "dx_face2_m": 1.143,
+          "crossed_ridge": true,
+          "yaw_after_phase1_deg": -4.0,
+          "on_slope_fraction_face1": 0.995,
+          "on_slope_fraction_face2": 1.0,
+          "final_base_xyz": [
+            0.9030097190041376,
+            -0.7909616844005387,
+            0.3816474063386733
+          ],
+          "initial_stand_joint_velocity_rms": 0.06729895621538162,
+          "final_stand_joint_velocity_rms": 0.013292896561324596,
+          "max_tilt_deg": 14.506684821104256,
+          "mean_abs_action": 1.3864367702821514,
+          "action_saturation_fraction": 0.15663322185061315,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 0.85,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.35,
+            "command_vy_mps": 0.3
+          }
+        }
+      ]
+    }
+  },
+  "overall_success_rate_percent": 100.0,
+  "elapsed_seconds": 1.6
+}

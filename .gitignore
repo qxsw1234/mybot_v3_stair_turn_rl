@@ -92,3 +92,6 @@ log/
 .codex_backups/
 *.bak_test
 *.before_*
+/robocon_reference/
+*.bak_robocon
+/ldl/

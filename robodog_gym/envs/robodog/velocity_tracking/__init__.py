@@ -82,7 +82,7 @@ class VelocityTrackingEasyEnv(LeggedRobot):
                 "body_angular_vel_cmd": self.commands.cpu().numpy()[:, 2:],
                 "contact_states": (self.contact_forces[:, self.feet_indices, 2] > 1.).detach().cpu().numpy().copy(),
                 "foot_positions": self.foot_positions.detach().cpu().numpy().copy(),
-                "body_pos": self.root_states[:, 0:3].detach().cpu().numpy(),
+                "body_pos": self.root_states[:self.num_envs, 0:3].detach().cpu().numpy(),
                 "torques": self.torques.detach().cpu().numpy(),
             })
 

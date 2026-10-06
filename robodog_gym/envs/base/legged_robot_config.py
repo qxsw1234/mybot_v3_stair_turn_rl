@@ -130,6 +130,21 @@ class Cfg(PrefixProto, cli=False):
         center_robots = False # center robots in the middle of the terrain grid, only makes sense without curriculum (wtw addition)
         center_span = 5
 
+        # ---- ROBOCON low-bar (限高杆 / 矮门) obstacle ----
+        # A real collision geometry placed inside each terrain tile (flat
+        # ground + one fixed-base actor holding cross-bar + two posts).  The
+        # bar cannot be represented by the 2.5D heightfield, so it is a
+        # separate Isaac Gym actor, not a height-field modification.
+        robocon_low_bar = False          # enable low-bar actors in every env
+        low_bar_clearance_min = 0.25     # [m] hardest row (lowest bar)
+        low_bar_clearance_max = 0.35     # [m] easiest row (highest bar)
+        low_bar_target_clearance = 0.30  # [m] ROBOCON competition spec
+        low_bar_width = 1.0              # [m] cross-bar length along y
+        low_bar_thickness = 0.05         # [m] cross-bar / post cross-section
+        low_bar_x = 2.0                  # [m] forward distance from spawn to bar
+        low_bar_asset_path = '{MINI_GYM_ROOT_DIR}/resources/objects/low_bar/low_bar.urdf'
+        robocon_low_bar_clearance_by_level = None  # optional per-row table
+
         # height_measurements params. Should be put in a separate class
         measure_heights = True
         # 1mx1.6m rectangle (without center line)
@@ -319,6 +334,12 @@ class Cfg(PrefixProto, cli=False):
         max_push_vel_xy = 1.
         randomize_lag_timesteps = True
         lag_timesteps = 6
+        randomize_joint_damping = False
+        joint_damping_range = [0.0, 2.0]
+        randomize_joint_armature = False
+        joint_armature_range = [0.01, 0.06]
+        randomize_joint_friction = False
+        joint_friction_loss_range = [0.0, 0.3]
 
     class rewards(PrefixProto, cli=False):
         reward_curriculum_factor_init = 0.001 # initial value for reward curriculum factor, that tends towards 1.0

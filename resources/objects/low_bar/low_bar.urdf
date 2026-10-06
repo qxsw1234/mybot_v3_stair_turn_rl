@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<!--
+  ROBOCON low-bar (限高杆 / 矮门) obstacle.
+
+  Single rigid link whose body origin is the CROSS-BAR CENTRE, so the generator
+  can set the clearance simply by placing the rigid-body pose at
+  z = clearance + half_thickness.  All three collision boxes live in this one
+  link so each parallel env costs exactly ONE actor (not three).
+
+  Competition geometry (RC_WheelLeg competition_terrains.py / nav XML):
+    clearance ~ 0.30 m, bar width ~ 1.0 m, bar cross-section ~ 0.05 m.
+  Posts are a fixed 0.45 m long so they still reach the ground across the whole
+  clearance curriculum [0.25, 0.35] m (they sink slightly into the ground at the
+  low end, which is harmless for a fixed-base, gravity-free actor).
+-->
+<robot name="low_bar">
+  <link name="low_bar">
+    <!-- cross bar: width along y -->
+    <collision name="cross_bar">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.05 1.0 0.05"/></geometry>
+    </collision>
+    <visual name="cross_bar_vis">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.05 1.0 0.05"/></geometry>
+      <material name="bar_red"><color rgba="0.80 0.10 0.10 1.0"/></material>
+    </visual>
+
+    <!-- left / right support posts -->
+    <collision name="post_pos_y">
+      <origin xyz="0 0.475 -0.225" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.45"/></geometry>
+    </collision>
+    <visual name="post_pos_y_vis">
+      <origin xyz="0 0.475 -0.225" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.45"/></geometry>
+      <material name="post_grey"><color rgba="0.6 0.6 0.6 1.0"/></material>
+    </visual>
+    <collision name="post_neg_y">
+      <origin xyz="0 -0.475 -0.225" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.45"/></geometry>
+    </collision>
+    <visual name="post_neg_y_vis">
+      <origin xyz="0 -0.475 -0.225" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.45"/></geometry>
+      <material name="post_grey"><color rgba="0.6 0.6 0.6 1.0"/></material>
+    </visual>
+  </link>
+</robot>

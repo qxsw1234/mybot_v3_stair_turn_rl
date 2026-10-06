@@ -254,6 +254,7 @@ class Runner:
 
         # store config file as yaml
         config_file_path = os.path.join(self.run_path, "parameters.yaml")
+        os.makedirs(os.path.dirname(config_file_path), exist_ok=True)
         with open(config_file_path, 'w') as file:
             yaml.dump(cfg_dict, file, sort_keys=False, default_flow_style=False, Dumper=CustomNoAliasDumper)
     

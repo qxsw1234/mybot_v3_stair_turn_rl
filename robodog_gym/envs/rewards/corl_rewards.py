@@ -213,8 +213,30 @@ class CoRLRewards:
 
     def _reward_base_height(self):
         # Penalize base height away from target
-        base_height = torch.mean(self.env.root_states[:, 2].unsqueeze(1) - self.env.measured_heights, dim=1)
+        base_height = torch.mean(self.env.root_states[:self.env.num_envs, 2].unsqueeze(1) - self.env.measured_heights, dim=1)
         return torch.square(base_height - self.env.cfg.rewards.base_height_target)
+
+    def _reward_low_bar_crouch(self):
+        """Encourage ducking while a low bar is still ahead of the robot.
+
+        The velocity-tracking task never asks the robot to lower its body, so
+        without this term there is no incentive to crouch under the bar.
+
+        bar_bottom (rel[:, 2]) is the bar's ground clearance measured from the
+        base: it is 0 when the base sits level with the bar bottom and grows
+        positive as the robot ducks below it.  We reward that positive margin
+        (capped) only while the bar is ahead, so there is no incentive to stay
+        crouched after passing.  Active only in low-bar mode: elsewhere
+        env.low_bar_relative_state() returns zeros and the gate is False.
+        """
+        rel = self.env.low_bar_relative_state()
+        forward = rel[:, 0]                      # + = bar ahead in base frame
+        bar_bottom = rel[:, 2]                   # base height below bar bottom
+        approach = float(getattr(self.env.cfg.terrain, 'low_bar_crouch_approach', 4.5))
+        margin = float(getattr(self.env.cfg.terrain, 'low_bar_crouch_margin', 0.10))
+        active = (forward > 0.0) & (forward < approach)
+        crouch = torch.clamp(bar_bottom / margin, 0.0, 1.0)
+        return active.float() * crouch
 
     def _reward_tracking_contacts_shaped_force(self):
         # penalize nonzero contact forces during swing phase

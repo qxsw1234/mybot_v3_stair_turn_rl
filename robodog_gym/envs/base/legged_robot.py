@@ -158,7 +158,7 @@ class LeggedRobot(BaseTask):
         self.last_last_joint_pos_target[:] = self.last_joint_pos_target[:]
         self.last_joint_pos_target[:] = self.joint_pos_target[:]
         self.last_dof_vel[:] = self.dof_vel[:]
-        self.last_root_vel[:] = self.root_states[:, 7:13]
+        self.last_root_vel[:] = self.root_states[:self.num_envs, 7:13]
 
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self._draw_debug_vis()
@@ -177,7 +177,7 @@ class LeggedRobot(BaseTask):
 
 
         if self.cfg.rewards.use_terminal_body_height: #selects the robodogs that encountered a terminal body height
-            self.body_height_termination_buf = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1) \
+            self.body_height_termination_buf = torch.mean(self.root_states[:self.num_envs, 2].unsqueeze(1) - self.measured_heights, dim=1) \
                                    < self.cfg.rewards.terminal_body_height
             self.reset_buf |= self.body_height_termination_buf
 
@@ -223,6 +223,7 @@ class LeggedRobot(BaseTask):
 
         self._call_train_eval(self._reset_dofs, env_ids)
         self._call_train_eval(self._reset_root_states, env_ids)
+        self._refresh_low_bar_poses(env_ids)
 
         # reset buffers
         self.last_actions[env_ids] = 0.
@@ -427,9 +428,12 @@ class LeggedRobot(BaseTask):
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target) \
 
     def set_main_agent_pose(self, loc, quat):
+        robot_ids = torch.zeros(1, dtype=torch.int32, device=self.device)
         self.root_states[0, 0:3] = torch.Tensor(loc)
         self.root_states[0, 3:7] = torch.Tensor(quat)
-        self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
+        self.gym.set_actor_root_state_tensor_indexed(
+            self.sim, gymtorch.unwrap_tensor(self.root_states),
+            gymtorch.unwrap_tensor(robot_ids), 1)
 
     # ------------- Callbacks --------------
     def _call_train_eval(self, func, env_ids):
@@ -509,6 +513,20 @@ class LeggedRobot(BaseTask):
                 r = self.dof_pos_limits[i, 1] - self.dof_pos_limits[i, 0]
                 self.dof_pos_limits[i, 0] = m - 0.5 * r * self.cfg.rewards.soft_dof_pos_limit
                 self.dof_pos_limits[i, 1] = m + 0.5 * r * self.cfg.rewards.soft_dof_pos_limit
+
+        cfg = self.cfg.domain_rand
+        if hasattr(cfg, "randomize_joint_damping") and cfg.randomize_joint_damping:
+            lo, hi = cfg.joint_damping_range
+            for i in range(len(props)):
+                props["damping"][i] = float(torch.rand(1).item() * (hi - lo) + lo)
+        if hasattr(cfg, "randomize_joint_armature") and cfg.randomize_joint_armature:
+            lo, hi = cfg.joint_armature_range
+            for i in range(len(props)):
+                props["armature"][i] = float(torch.rand(1).item() * (hi - lo) + lo)
+        if hasattr(cfg, "randomize_joint_friction") and cfg.randomize_joint_friction:
+            lo, hi = cfg.joint_friction_loss_range
+            for i in range(len(props)):
+                props["friction"][i] = float(torch.rand(1).item() * (hi - lo) + lo)
 
         return props
 
@@ -888,7 +906,7 @@ class LeggedRobot(BaseTask):
                     success_thresholds.append(self.curriculum_thresholds[key] * self.reward_scales[key]) # for each reward type, the success threshold scaled by reward factor (keys x 1)
 
             old_bins = self.env_command_bins[env_ids_in_category.cpu().numpy()] # save where we sampled from before, this is important to know where to expand command distribution
-            if len(success_thresholds) > 0:
+            if len(success_thresholds) > 0 and self.cfg.commands.command_curriculum:
                 curriculum.update(old_bins, task_rewards, success_thresholds,
                                   local_range=np.array(
                                       [0.55, 0.55, 0.55, 0.55, 0.35, 0.25, 0.25, 0.25, 0.25, 1.0, 1.0, 1.0, 1.0, 1.0,
@@ -1247,7 +1265,10 @@ class LeggedRobot(BaseTask):
             max_vel = cfg.domain_rand.max_push_vel_xy
             self.root_states[env_ids, 7:9] = torch_rand_float(-max_vel, max_vel, (len(env_ids), 2),
                                                               device=self.device)  # lin vel x/y
-            self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
+            push_ids = env_ids.to(dtype=torch.int32)
+            self.gym.set_actor_root_state_tensor_indexed(
+                self.sim, gymtorch.unwrap_tensor(self.root_states),
+                gymtorch.unwrap_tensor(push_ids), len(push_ids))
 
     def _teleport_robots(self, env_ids, cfg):
         """ Teleports any robots that are too close to the edge to the other side
@@ -1271,7 +1292,10 @@ class LeggedRobot(BaseTask):
                 self.root_states[env_ids, 1] > cfg.terrain.terrain_width * cfg.terrain.num_cols - thresh]
             self.root_states[high_y_ids, 1] -= cfg.terrain.terrain_width * (cfg.terrain.num_cols - 1)
 
-            self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
+            tele_ids = env_ids.to(dtype=torch.int32)
+            self.gym.set_actor_root_state_tensor_indexed(
+                self.sim, gymtorch.unwrap_tensor(self.root_states),
+                gymtorch.unwrap_tensor(tele_ids), len(tele_ids))
             self.gym.refresh_actor_root_state_tensor(self.sim)
 
     # ----------------------------------------
@@ -1355,7 +1379,7 @@ class LeggedRobot(BaseTask):
                                                       device=self.device,
                                                       requires_grad=False)
         self.last_dof_vel = torch.zeros_like(self.dof_vel) # used for reward computation
-        self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
+        self.last_root_vel = torch.zeros_like(self.root_states[:self.num_envs, 7:13])
 
 
         self.commands_value = torch.zeros(self.num_envs, self.cfg.commands.num_commands, dtype=torch.float,
@@ -1710,6 +1734,23 @@ class LeggedRobot(BaseTask):
         asset_options.disable_gravity = self.cfg.asset.disable_gravity
 
         self.robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+
+        # ---- ROBOCON low-bar (限高杆) obstacle asset ----
+        # A single fixed-base link holding the cross-bar + two posts as three
+        # box shapes, so each env costs exactly one actor.  Loaded only when
+        # the low-bar mode is requested, so the mixed/stairs configs are
+        # byte-for-byte unaffected.
+        self.low_bar_asset = None
+        self.low_bar_actor_handles = []
+        if getattr(self.cfg.terrain, 'robocon_low_bar', False):
+            lb_path = self.cfg.terrain.low_bar_asset_path.format(MINI_GYM_ROOT_DIR=MINI_GYM_ROOT_DIR)
+            lb_options = gymapi.AssetOptions()
+            lb_options.fix_base_link = True
+            lb_options.disable_gravity = True
+            lb_options.collapse_fixed_joints = True
+            self.low_bar_asset = self.gym.load_asset(
+                self.sim, os.path.dirname(lb_path), os.path.basename(lb_path), lb_options)
+            print('ROBOCON low_bar: loaded asset from', lb_path)
         self.num_dof = self.gym.get_asset_dof_count(self.robot_asset)
         self.num_actuated_dof = self.num_actions
         self.num_bodies = self.gym.get_asset_rigid_body_count(self.robot_asset)
@@ -1773,6 +1814,22 @@ class LeggedRobot(BaseTask):
             self.envs.append(env_handle)
             self.actor_handles.append(anymal_handle)
 
+        # ---- ROBOCON low-bar (限高杆) actors ----
+        # Created in a SEPARATE pass, after every robot, so the global actor
+        # ordering stays robot[0..N-1] then bar[0..N-1].  Creating the bar
+        # inside the robot loop would interleave it and corrupt the
+        # root_states[:num_envs] / rigid_body_state / net_contact_forces
+        # slices used throughout the env.  group=i + filter=0 collides with
+        # this env's robot only (Isaac Gym rule:
+        #   collide <=> same group AND (filterA & filterB) == 0).
+        if self.low_bar_asset is not None:
+            for i in range(self.num_envs):
+                lb_pose = gymapi.Transform()
+                lb_pose.p = gymapi.Vec3(*self._low_bar_world_pose(i))
+                lb_handle = self.gym.create_actor(
+                    self.envs[i], self.low_bar_asset, lb_pose, "low_bar", i, 0)
+                self.low_bar_actor_handles.append(lb_handle)
+
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(feet_names)):
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0],
@@ -1810,6 +1867,102 @@ class LeggedRobot(BaseTask):
         self.video_frames_eval = []
         self.complete_video_frames = []
         self.complete_video_frames_eval = []
+
+    # ------------------------------------------------------------------
+    # ROBOCON low-bar (限高杆) helpers
+    # ------------------------------------------------------------------
+    def _low_bar_clearance_for_env(self, env_i):
+        """Return the cross-bar ground clearance [m] for environment env_i.
+
+        Difficulty is driven by the terrain row (curriculum level): row 0 is
+        the easiest (highest bar) and the last row is the hardest (lowest
+        bar), i.e. the opposite direction to the stairs.  An explicit per-row
+        table overrides the linear interpolation if one is configured."""
+        level = 0
+        if hasattr(self, 'terrain_levels') and self.terrain_levels.numel() > env_i:
+            level = int(self.terrain_levels[env_i].item())
+        table = getattr(self.cfg.terrain, 'robocon_low_bar_clearance_by_level', None)
+        if table:
+            level = max(0, min(level, len(table) - 1))
+            return float(table[level])
+        num_rows = max(1, int(getattr(self.cfg.terrain, 'num_rows', 1)))
+        cmin = float(getattr(self.cfg.terrain, 'low_bar_clearance_min', 0.25))
+        cmax = float(getattr(self.cfg.terrain, 'low_bar_clearance_max', 0.35))
+        if num_rows <= 1:
+            return cmax
+        return cmax + (cmin - cmax) * level / (num_rows - 1)
+
+    def low_bar_relative_state(self):
+        """Vectorised bar state relative to each robot base (no gym query).
+
+        Returns a (num_envs, 3) tensor, expressed in the base frame:
+            [forward distance, lateral offset, bar-bottom height above base].
+        Shared by the obstacle_ahead observation and the low_bar_crouch reward.
+        """
+        num = self.num_envs
+        origin = self.env_origins[:num]
+        num_rows = max(1, int(getattr(self.cfg.terrain, 'num_rows', 1)))
+        cmin = float(getattr(self.cfg.terrain, 'low_bar_clearance_min', 0.25))
+        cmax = float(getattr(self.cfg.terrain, 'low_bar_clearance_max', 0.35))
+        levels = self.terrain_levels[:num].clamp(0, num_rows - 1).float()
+        table = getattr(self.cfg.terrain, 'robocon_low_bar_clearance_by_level', None)
+        if table:
+            tbl = torch.tensor(table, device=self.device, dtype=torch.float32)
+            idx = levels.long().clamp(0, tbl.numel() - 1)
+            clearance = tbl[idx]
+        elif num_rows <= 1:
+            clearance = torch.full_like(levels, cmax)
+        else:
+            clearance = cmax + (cmin - cmax) * levels / (num_rows - 1)
+        half_thick = 0.5 * float(getattr(self.cfg.terrain, 'low_bar_thickness', 0.05))
+        bar_x = float(getattr(self.cfg.terrain, 'low_bar_x', 2.0))
+        bar_world = origin.clone()
+        bar_world[:, 0] += bar_x
+        bar_world[:, 2] = clearance + half_thick
+        rel = bar_world - self.root_states[:num, :3]
+        rel_body = quat_apply(quat_conjugate(self.base_quat[:num]), rel)
+        forward = rel_body[:, 0]
+        lateral = rel_body[:, 1]
+        bar_bottom_above_base = rel_body[:, 2] - half_thick
+        return torch.stack([forward, lateral, bar_bottom_above_base], dim=-1)
+
+    def _low_bar_world_pose(self, env_i):
+        """World position of the low-bar body origin (cross-bar centre).
+
+        Uses the *env-local* convention: the bar sits low_bar_x metres in
+        front of that env's spawn origin, i.e. an offset in the env frame
+        added to env_origins -- never a hard-coded world coordinate."""
+        clearance = self._low_bar_clearance_for_env(env_i)
+        x = float(getattr(self.cfg.terrain, 'low_bar_x', 2.0))
+        half_thick = 0.5 * float(getattr(self.cfg.terrain, 'low_bar_thickness', 0.05))
+        origin = self.env_origins[env_i]
+        return (float(origin[0]) + x, float(origin[1]), clearance + half_thick)
+
+    def _refresh_low_bar_poses(self, env_ids):
+        """Re-place each low-bar actor for the given envs after a curriculum
+        level change, so the clearance tracks the new terrain row."""
+        if not getattr(self.cfg.terrain, 'robocon_low_bar', False):
+            return
+        if not self.low_bar_actor_handles:
+            return
+        # GPU-pipeline safe: the bar actors occupy rows [num_envs : 2*num_envs]
+        # of the actor root-state tensor, so update them there and push with the
+        # indexed tensor API (get/set_actor_rigid_body_states is illegal once
+        # the sim has started under use_gpu_pipeline).
+        env_ids = env_ids.to(dtype=torch.long)
+        bar_ids = env_ids + self.num_envs
+        for e in env_ids.tolist():
+            x, y, z = self._low_bar_world_pose(e)
+            self.root_states[e + self.num_envs, 0] = x
+            self.root_states[e + self.num_envs, 1] = y
+            self.root_states[e + self.num_envs, 2] = z
+            self.root_states[e + self.num_envs, 3:7] = torch.tensor(
+                [0.0, 0.0, 0.0, 1.0], device=self.device)
+            self.root_states[e + self.num_envs, 7:13] = 0.0
+        bar_ids_int32 = bar_ids.to(dtype=torch.int32)
+        self.gym.set_actor_root_state_tensor_indexed(
+            self.sim, gymtorch.unwrap_tensor(self.root_states),
+            gymtorch.unwrap_tensor(bar_ids_int32), len(bar_ids_int32))
 
     def render(self, mode="rgb_array"):
         assert mode == "rgb_array"
@@ -2016,7 +2169,7 @@ class LeggedRobot(BaseTask):
         # height_points is a predefined list of points to be sampled in base frame (z component = 0)
         # offset and rotate points by base position and base yaw
         points = quat_apply_yaw(self.base_quat.repeat(1, self.cfg.env.num_height_points),
-                                height_sample_points) + (self.root_states[:, :3]).unsqueeze(1)
+                                height_sample_points) + (self.root_states[:self.num_envs, :3]).unsqueeze(1)
 
         # heigh_map_shift z component has no effect
         if heigh_map_shift is not None:

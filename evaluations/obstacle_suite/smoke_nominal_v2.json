@@ -1,0 +1,241 @@
+{
+  "checkpoint": "059950",
+  "profile": "aligned_damped",
+  "mode": "nominal",
+  "seed": 7,
+  "max_move_seconds": 25.0,
+  "obstacles": {
+    "t_stairs": {
+      "aggregate": {
+        "trials": 3,
+        "successes": 3,
+        "success_rate_percent": 100.0,
+        "failure_reasons": {
+          "success": 3
+        },
+        "mean_max_tilt_deg": 24.4,
+        "mean_action_saturation_percent": 16.4,
+        "mean_top_time_s": 4.12,
+        "mean_max_abs_y_m": 0.228
+      },
+      "records": [
+        {
+          "obstacle": "t_stairs",
+          "success": true,
+          "reason": "success",
+          "reached_platform": true,
+          "top_time_s": 4.12,
+          "steps_contacted": 7,
+          "steps_missing": [],
+          "max_abs_y_m": 0.22813681201772207,
+          "final_base_xyz": [
+            3.0820219126498083,
+            0.1659188096489238,
+            0.3474286648663313
+          ],
+          "initial_stand_joint_velocity_rms": 0.052773986011743546,
+          "final_stand_joint_velocity_rms": 0.029882213100790977,
+          "max_tilt_deg": 24.398855236089066,
+          "mean_abs_action": 1.4852684310838289,
+          "action_saturation_fraction": 0.16442577030812325,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 1.0,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.4
+          }
+        },
+        {
+          "obstacle": "t_stairs",
+          "success": true,
+          "reason": "success",
+          "reached_platform": true,
+          "top_time_s": 4.12,
+          "steps_contacted": 7,
+          "steps_missing": [],
+          "max_abs_y_m": 0.22813681201772207,
+          "final_base_xyz": [
+            3.0820219126498083,
+            0.1659188096489238,
+            0.3474286648663313
+          ],
+          "initial_stand_joint_velocity_rms": 0.052773986011743546,
+          "final_stand_joint_velocity_rms": 0.029882213100790977,
+          "max_tilt_deg": 24.398855236089066,
+          "mean_abs_action": 1.4852684310838289,
+          "action_saturation_fraction": 0.16442577030812325,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 1.0,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.4
+          }
+        },
+        {
+          "obstacle": "t_stairs",
+          "success": true,
+          "reason": "success",
+          "reached_platform": true,
+          "top_time_s": 4.12,
+          "steps_contacted": 7,
+          "steps_missing": [],
+          "max_abs_y_m": 0.22813681201772207,
+          "final_base_xyz": [
+            3.0820219126498083,
+            0.1659188096489238,
+            0.3474286648663313
+          ],
+          "initial_stand_joint_velocity_rms": 0.052773986011743546,
+          "final_stand_joint_velocity_rms": 0.029882213100790977,
+          "max_tilt_deg": 24.398855236089066,
+          "mean_abs_action": 1.4852684310838289,
+          "action_saturation_fraction": 0.16442577030812325,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 1.0,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.4
+          }
+        }
+      ]
+    },
+    "ridge_slope": {
+      "aggregate": {
+        "trials": 3,
+        "successes": 3,
+        "success_rate_percent": 100.0,
+        "failure_reasons": {
+          "success": 3
+        },
+        "mean_max_tilt_deg": 15.1,
+        "mean_action_saturation_percent": 16.0,
+        "mean_face1_walk_m": 1.615,
+        "mean_face2_walk_m": 1.206
+      },
+      "records": [
+        {
+          "obstacle": "ridge_slope",
+          "success": true,
+          "reason": "success",
+          "face1_walk_m": 1.615,
+          "face2_walk_m": 1.206,
+          "crossed_ridge": true,
+          "yaw_after_phase1_deg": 0.9,
+          "on_slope_fraction_face1": 0.757,
+          "on_slope_fraction_face2": 1.0,
+          "final_base_xyz": [
+            1.1117459368377063,
+            -0.8207015826375047,
+            0.3754301392891933
+          ],
+          "initial_stand_joint_velocity_rms": 0.052773986011743546,
+          "final_stand_joint_velocity_rms": 0.01227379497140646,
+          "max_tilt_deg": 15.12446039657185,
+          "mean_abs_action": 1.3759056302700556,
+          "action_saturation_fraction": 0.15962009803921567,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 0.85,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.35,
+            "command_vy_mps": 0.3
+          }
+        },
+        {
+          "obstacle": "ridge_slope",
+          "success": true,
+          "reason": "success",
+          "face1_walk_m": 1.615,
+          "face2_walk_m": 1.206,
+          "crossed_ridge": true,
+          "yaw_after_phase1_deg": 0.9,
+          "on_slope_fraction_face1": 0.757,
+          "on_slope_fraction_face2": 1.0,
+          "final_base_xyz": [
+            1.1117459368377063,
+            -0.8207015826375047,
+            0.3754301392891933
+          ],
+          "initial_stand_joint_velocity_rms": 0.052773986011743546,
+          "final_stand_joint_velocity_rms": 0.01227379497140646,
+          "max_tilt_deg": 15.12446039657185,
+          "mean_abs_action": 1.3759056302700556,
+          "action_saturation_fraction": 0.15962009803921567,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 0.85,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.35,
+            "command_vy_mps": 0.3
+          }
+        },
+        {
+          "obstacle": "ridge_slope",
+          "success": true,
+          "reason": "success",
+          "face1_walk_m": 1.615,
+          "face2_walk_m": 1.206,
+          "crossed_ridge": true,
+          "yaw_after_phase1_deg": 0.9,
+          "on_slope_fraction_face1": 0.757,
+          "on_slope_fraction_face2": 1.0,
+          "final_base_xyz": [
+            1.1117459368377063,
+            -0.8207015826375047,
+            0.3754301392891933
+          ],
+          "initial_stand_joint_velocity_rms": 0.052773986011743546,
+          "final_stand_joint_velocity_rms": 0.01227379497140646,
+          "max_tilt_deg": 15.12446039657185,
+          "mean_abs_action": 1.3759056302700556,
+          "action_saturation_fraction": 0.15962009803921567,
+          "fell": false,
+          "parameters": {
+            "spawn_x_m": 0.0,
+            "spawn_y_offset_m": 0.0,
+            "spawn_yaw_deg": 0.0,
+            "friction": 0.85,
+            "base_mass_scale": 1.0,
+            "joint_damping_scale": 1.0,
+            "motor_strength_scale": 1.0,
+            "action_lag_steps": 0,
+            "command_vx_mps": 0.35,
+            "command_vy_mps": 0.3
+          }
+        }
+      ]
+    }
+  },
+  "overall_success_rate_percent": 100.0,
+  "elapsed_seconds": 3.3
+}

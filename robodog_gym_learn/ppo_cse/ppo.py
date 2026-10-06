@@ -87,7 +87,7 @@ class PPO:
         # (if not modified by non-in-place operations)
         self.transition.rewards = rewards.detach().clone()
         self.transition.dones = dones.detach().clone()
-        self.transition.env_bins = infos["env_bins"]
+        self.transition.env_bins = infos.get("env_bins", torch.zeros_like(rewards, dtype=torch.long))
         # Bootstrapping on time outs
         if 'time_outs' in infos:
             self.transition.rewards += self.cfg_ppo.algorithm.gamma * torch.squeeze(

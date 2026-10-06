@@ -345,12 +345,19 @@ class Observations:
         
     def _calculate_height_measurements(self):
         # height_measurements noise is handled separately
-        return torch.clip(self.env.noisy_measured_heights - self.env.root_states[:, 2].unsqueeze(1) + self.env.obs_bias.height_measurements, -1, 1.) * self.env.obs_scales.height_measurements
+        return torch.clip(self.env.noisy_measured_heights - self.env.root_states[:self.env.num_envs, 2].unsqueeze(1) + self.env.obs_bias.height_measurements, -1, 1.) * self.env.obs_scales.height_measurements
 
+    def _calculate_obstacle_ahead(self):
+        """Body-frame observation of the upcoming ROBOCON low-bar.
 
-    # -----------------------
-    # Privileged observations
-    # -----------------------
+        The terrain height scanner samples the ground *below* the robot, so it
+        physically cannot see a bar hanging above head height.  This exposes
+        the bar relative to the robot base as three values (all metres):
+            [forward distance, lateral offset, bar-bottom height above base]
+        It delegates to env.low_bar_relative_state(); in non-low-bar tasks that
+        returns zeros so the other task layouts are unaffected.
+        """
+        return self.env.low_bar_relative_state()
 
     def _calculate_priv_friction(self):
         friction_coeffs_scale, friction_coeffs_shift = get_scale_shift(self.env.cfg.normalization.friction_range)

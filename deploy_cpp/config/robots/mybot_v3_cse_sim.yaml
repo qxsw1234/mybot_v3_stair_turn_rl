@@ -61,7 +61,7 @@ height_points_y: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
 
 robot_name: mybot_v3_cse
 urdf_relpath: robot/mybot_v3/urdf/mybot_v3.urdf
-mujoco_xml_relpath: robot/mybot_v3/xml/mybot_v3.xml
+mujoco_xml_relpath: robot/mybot_v3/xml/mybot_v3_1hao.xml
 isaac_xml_relpath: robot/mybot_v3/xml/mybot_v3.xml
 
 command_lin_vel_scale: 2.0

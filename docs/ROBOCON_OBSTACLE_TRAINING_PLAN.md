@@ -211,6 +211,49 @@ Checkpoint 排名顺序：
 
 评测集必须包含训练中未出现的随机种子和障碍尺寸组合，避免只验证记住的 curriculum level。
 
+### 4.5 M1.1 已实现的 Low Bar 评测协议（2026-10-10）
+
+评测器 `scripts/eval_low_bar_isaac.py` 已按下述四条完成加固，配套脚本
+`scripts/run_low_bar_gate.sh`（跑门禁）和 `scripts/report_low_bar_gate.py`
+（出报告并给出判定）：
+
+1. **置信区间**：所有比率同时输出计数和 Wilson 95% 区间
+   （`*_ci95_percent`），不再只给一个点估计；
+2. **配对比较**：同一次调用内的所有候选共用同一随机序列，按 `(seed, env)`
+   逐 episode 配对，输出配对差值、其 95% 区间、精确 McNemar p 值和四格计数；
+3. **分组报告**：同时给出 `competition_spec`（恰好 0.30 m）、
+   `easier_than_spec`、`harder_than_spec` 和 `full_range`（0.25～0.35 m）；
+4. **可追溯性**：protocol 记录 git commit、`git_dirty`、评测器 SHA256、种子
+   列表、出生扰动范围、观测噪声配置和每个 clearance 档位。
+
+#### 为什么必须配对
+
+2026-10-10 的重复实验（同一 checkpoint `060922`、同一 seed `20261017`、
+`train-matched`，只换进程）：
+
+- 单候选重复三次的绝对成功率：`71.6% / 70.3% / 70.6%`；
+- 多候选同进程跑时，同一 checkpoint 出现过 `68.0%` 和 `73.2%`；
+- 而 `060922` 相对 `060898` 的**配对差值**三次为
+  `+0.00 / -0.26 / +0.26` 个百分点。
+
+结论：绝对成功率有约 1.3 个百分点以上的进程级抖动（GPU 求解与 cuBLAS 的非
+确定性；`384` 与 `500` 环境还会消费不同的随机序列），**不能跨调用比较数字**；
+配对差值稳定在 ±0.3 个百分点，是可用的判据。
+
+#### 判定规则
+
+- 候选只有在**配对差值 95% 区间下界大于 0** 时才记为提升；
+- 区间包含 0 一律记为"无显著差异"，不得用点估计的 2～3 个百分点晋级；
+- 参照基线必须在同一次调用内重新评测（`--baseline-run`），不复用历史数字；
+- 384 环境只做筛选；正式候选使用 2 个 held-out seed × 500 环境
+  （= 1000 episodes），此时配对差值区间半宽约 2 个百分点。
+
+#### 已知限制
+
+- `--num-envs` 是协议的一部分：不同批量大小对应不同随机序列，结果不可互比；
+- 每个 clearance 档位在 1000 episodes 下只有约 84 个样本，档位级结论仍有
+  ±9 个百分点量级的不确定度，不能凭单档位差异选模型。
+
 ## 5. Phase 1：Low Bar 专家——先打通完整链路
 
 ### 5.1 课程顺序
@@ -277,11 +320,28 @@ Checkpoint 排名顺序：
 - 参数级 smoke test 确认：新增输入列发生更新，legacy actor 和 adaptation module 的最大参数变化为 0；
 - 评测器现支持 `nominal`/`train-matched`、固定 held-out seed、横向/航向出生扰动和 action-noise 诊断，并把任务碰撞/越界与真实跌倒分开统计；
 - 已修复训练监控的两个统计错误：episode batch 按实际完成数量加权，且每个 physics step 清空旧 `extras`，不再重复累计上一次 reset 的指标；Low Bar 首轮训练也已关闭随机 episode age，避免截断“接近→穿越→恢复”序列；
-- 横向 ±0.05 m、航向 ±0.05 rad 的 `train-matched` 条件下，`060898` 在 384 环境 held-out 协议上约为 70.1%；真实跌倒约 0%，主要失败是门框外穿越约 20% 和横杆/立柱碰撞约 10%；
-- 两轮 7 维 observation adapter-only 训练在 384 环境上约为 70.1% 和 70.6%，没有形成显著提升，说明仅训练新输入列已经到达当前能力上限；
-- 已验证全 actor、小学习率、冻结 adaptation/std、reference-policy anchor 的训练链路。96 环境筛选曾出现 76%～79.2%，但两个独立的 384 环境复测中最佳仅与 70.1% 基线持平；该配置已按门槛停止，不能用小样本峰值晋级；
-- 下一轮不继续堆同配置 iteration。先实现分阶段位姿 curriculum（居中→小横向偏差→小航向偏差→联合 ±0.05），并让 checkpoint 筛选至少使用 384 环境；只有大样本提升达到 2～3 个百分点才启动下一训练块；
-- M1 状态：**未完成**。在连续两个 384 环境 checkpoint 达到 90% 前，不启动 Bridge A 正式训练。
+- M1.1 已完成：评测器加入 Wilson 95% 区间、配对比较（精确 McNemar + 配对差值
+  区间）、分组报告和 git/评测器哈希溯源；新增 `scripts/run_low_bar_gate.sh` 与
+  `scripts/report_low_bar_gate.py`；协议细节见 §4.5；
+- 旧口径（把障碍碰撞/出界计入 `fell`）的 15 个评测日志已归档到
+  `logs/archive_pre_metric_fix/`，含 `README.md` 说明；不要与当前数字比较；
+- 用正式协议（2 个 held-out seed × 500 环境 = 1000 episodes）重测 `060898`
+  家族，横向 ±0.05 m、航向 ±0.05 rad 的 `train-matched` 条件下：
+  `060898` ≈ 73.1%、`060920` ≈ 73.1%、`060922` ≈ 73.4%；三者两两配对差值的
+  95% 区间均包含 0，即**当前无可分辨的提升**；
+- 因此此前"`060898` 约 70.1%"是 384 环境协议下的偏低读数。改用 1000 episodes
+  后基线约 73%，主要失败仍是门框外穿越约 21%，横杆/立柱碰撞约 5.8%，真实
+  跌倒 ≈ 0%；
+- 碰杆率也从 384 环境的约 9.9% 修正为 1000 episodes 的约 5.8%，说明小样本
+  曾高估碰杆；`0.30 m` 档位在 1000 episodes 下只有约 84 个样本，暂不能据此排序；
+- 两轮 7 维 observation adapter-only，以及全 actor 小学习率 + policy anchor
+  配置，在正式协议下都没有超过 `060898`；96 环境出现的 76%～79.2% 确认是小
+  样本峰值，已按门槛停止；
+- 下一轮不继续堆同配置 iteration。先做 M1.3（单独解决碰杆，含 base 高度与
+  crouch shaping 诊断），再做 M1.2 分阶段位姿 curriculum；每阶段用
+  `scripts/run_low_bar_gate.sh` 做配对判定，区间下界必须大于 0；
+- M1 状态：**未完成**。在连续两个 checkpoint 用正式协议达到 90% 前，不启动
+  Bridge A 正式训练。
 
 ## 6. Phase 2：Bridge A 专家
 
@@ -466,8 +526,10 @@ Bridge B 的 20 cm 条板与 Bridge A 的 1 m 宽桥属于明显不同的 locomo
 
 ### M1：Low Bar Isaac Gym
 
-- held-out success rate `≥ 90%`；
+- held-out success rate `≥ 90%`，由 §4.5 的正式协议测得（2 个 held-out seed，
+  每个候选 ≥ 1000 episodes）；
 - 连续两个 checkpoint 达标；
+- 候选相对**同一次调用内重新评测**的基线，配对差值 95% 区间下界大于 0；
 - reward 与 success rate 同步上升。
 
 ### M2：Low Bar MuJoCo/观测链路

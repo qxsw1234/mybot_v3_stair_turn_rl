@@ -7,14 +7,37 @@ crossing.  Multiple checkpoints share one simulator instance so a training run
 can be ranked quickly and consistently. ``nominal`` removes pose/sensor/dynamics
 randomization, while ``train-matched`` preserves the run's saved randomization
 contract and uses a fixed held-out seed for fair checkpoint comparisons.
+
+Every candidate also runs the same held-out seeds, so per-episode outcomes are
+paired and two candidates can be compared with a paired delta, its 95% interval
+and an exact McNemar test instead of two independent rates that cannot resolve a
+two-percentage-point difference.  Reported rates carry Wilson 95% intervals and
+are split into the 0.30 m competition clearance and the full 0.25-0.35 m range.
+The output records the git commit, the evaluator hash and the run's dirty state.
+
+Examples::
+
+    # Quick screening during training (one seed, few hundred episodes).
+    python -u scripts/eval_low_bar_isaac.py --run RUN --iterations 60900 60910 \
+        --num-envs 384 --profile train-matched --seed 20261017 --out /tmp/screen.json
+
+    # Formal candidate gate: 2 held-out seeds, 1000+ episodes per candidate.
+    python -u scripts/eval_low_bar_isaac.py --run RUN --iterations 60900 60910 \
+        --baseline-run BASE_RUN --baseline-iteration 60898 \
+        --num-envs 500 --profile train-matched \
+        --seeds 20261017 20261018 --out /tmp/gate.json
 """
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import pickle as pkl
 import random
+import subprocess
 import sys
+from fractions import Fraction
 
 import isaacgym  # noqa: F401  # must precede torch
 from isaacgym import gymapi, gymtorch
@@ -73,6 +96,171 @@ def _checkpoint_path(run, iteration):
     return path
 
 
+WILSON_Z = 1.959963984540054  # two-sided 95%
+
+RATE_FIELDS = (
+    ("success", "success_rate_percent"),
+    ("passed", "pass_rate_percent"),
+    ("recovered", "recovery_rate_percent"),
+    ("crossed_outside_gate", "outside_gate_rate_percent"),
+    ("collision", "collision_rate_percent"),
+    ("fell", "fall_rate_percent"),
+)
+
+
+def _wilson_interval(successes, total, z=WILSON_Z):
+    """Wilson score interval for a binomial proportion, returned in percent."""
+    if total <= 0:
+        return [0.0, 0.0]
+    phat = successes / total
+    denominator = 1.0 + z * z / total
+    centre = phat + z * z / (2.0 * total)
+    spread = z * math.sqrt(
+        phat * (1.0 - phat) / total + z * z / (4.0 * total * total))
+    low = (centre - spread) / denominator
+    high = (centre + spread) / denominator
+    return [round(100.0 * min(1.0, max(0.0, low)), 1),
+            round(100.0 * min(1.0, max(0.0, high)), 1)]
+
+
+def _summarize(records):
+    """Metric block with explicit counts and Wilson 95% intervals.
+
+    A rate without an interval is not usable for Go/No-Go decisions: at a few
+    hundred episodes the binomial half-width is several percentage points, so
+    every reported rate carries its own ``*_ci95_percent`` companion.
+    """
+    total = len(records)
+    block = {"episodes": total}
+    for field, key in RATE_FIELDS:
+        count = sum(1 for item in records if item[field])
+        block[key] = round(100.0 * count / max(1, total), 1)
+        block[key.replace("_percent", "_ci95_percent")] = _wilson_interval(
+            count, total)
+        if field == "success":
+            block["success_count"] = count
+    block["mean_max_bar_force_n"] = round(float(np.mean(
+        [item["max_bar_force_n"] for item in records])) if records else 0.0, 3)
+    block["mean_min_base_height_m"] = round(float(np.mean(
+        [item["min_base_height_m"] for item in records])) if records else 0.0, 4)
+    return block
+
+
+def _by_row(records):
+    by_row = {}
+    for row in sorted(set(int(item["row"]) for item in records)):
+        subset = [item for item in records if item["row"] == row]
+        block = _summarize(subset)
+        block["clearance_m"] = round(float(subset[0]["clearance_m"]), 4)
+        by_row[str(row)] = block
+    return by_row
+
+
+def _grouped(records, target_clearance):
+    """Competition-spec clearance versus the full 0.25-0.35 m range.
+
+    The plan requires separate reporting for the 0.30 m competition clearance
+    and for the randomized range; the two halves are included because a mean
+    over the range can hide an asymmetry between easy and hard rows.
+    """
+    buckets = {}
+    for item in records:
+        clearance = float(item["clearance_m"])
+        if abs(clearance - target_clearance) < 1e-4:
+            buckets.setdefault("competition_spec", []).append(item)
+        elif clearance > target_clearance:
+            buckets.setdefault("easier_than_spec", []).append(item)
+        else:
+            buckets.setdefault("harder_than_spec", []).append(item)
+    groups = {"full_range": _summarize(records)}
+    for name in ("competition_spec", "easier_than_spec", "harder_than_spec"):
+        groups[name] = _summarize(buckets.get(name, []))
+    return groups
+
+
+def _mcnemar_exact_p_value(reference_only, candidate_only):
+    """Two-sided exact McNemar test over the discordant pairs."""
+    discordant = reference_only + candidate_only
+    if discordant == 0:
+        return 1.0
+    tail = sum(math.comb(discordant, k)
+               for k in range(0, min(reference_only, candidate_only) + 1))
+    p_value = 2.0 * float(Fraction(tail, 2 ** discordant))
+    return round(min(1.0, p_value), 6)
+
+
+def _paired_compare(reference, candidate):
+    """Paired success comparison for candidates sharing seeds and env indices.
+
+    Every candidate is re-seeded identically before each episode, so env ``i``
+    under seed ``s`` faces the same terrain row, spawn offset, heading and
+    sensor noise.  Pairing on ``(seed, env)`` removes the between-episode
+    variance that dominates an unpaired comparison at a few hundred episodes.
+    """
+    reference_by_key = {(item["seed"], item["env"]): item for item in reference}
+    candidate_by_key = {(item["seed"], item["env"]): item for item in candidate}
+    keys = sorted(set(reference_by_key) & set(candidate_by_key))
+    both_success = reference_only_success = candidate_only_success = 0
+    both_fail = 0
+    for key in keys:
+        reference_success = bool(reference_by_key[key]["success"])
+        candidate_success = bool(candidate_by_key[key]["success"])
+        if reference_success and candidate_success:
+            both_success += 1
+        elif reference_success:
+            reference_only_success += 1
+        elif candidate_success:
+            candidate_only_success += 1
+        else:
+            both_fail += 1
+    n_pairs = len(keys)
+    delta = 100.0 * (candidate_only_success - reference_only_success) / max(1, n_pairs)
+    variance = (reference_only_success + candidate_only_success
+                - (candidate_only_success - reference_only_success) ** 2
+                / max(1, n_pairs)) / max(1, n_pairs) ** 2
+    half_width = WILSON_Z * math.sqrt(max(0.0, variance)) * 100.0
+    return {
+        "n_pairs": n_pairs,
+        "both_success": both_success,
+        "reference_only_success": reference_only_success,
+        "candidate_only_success": candidate_only_success,
+        "both_fail": both_fail,
+        "success_delta_percent": round(delta, 2),
+        "success_delta_ci95_percent": [round(delta - half_width, 2),
+                                       round(delta + half_width, 2)],
+        "mcnemar_exact_p": _mcnemar_exact_p_value(
+            reference_only_success, candidate_only_success),
+    }
+
+
+def _git_state():
+    """Commit hash and dirty flag so every result names the code that made it."""
+    def run(*command):
+        try:
+            completed = subprocess.run(
+                command, cwd=PROJECT, capture_output=True, text=True,
+                timeout=20, check=False)
+            return completed.stdout.strip()
+        except Exception:
+            return ""
+
+    commit = run("git", "rev-parse", "HEAD")
+    dirty = run("git", "status", "--porcelain")
+    return {
+        "git_commit": commit or None,
+        "git_dirty": bool(dirty) if commit else None,
+        "git_dirty_files": dirty.splitlines()[:20],
+    }
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _load_policy(env, checkpoint_path):
     model = ActorCritic(
         env.num_policy_obs,
@@ -99,17 +287,19 @@ def _load_policy(env, checkpoint_path):
     return model, migration
 
 
-def _evaluate(env, model, args):
+def _evaluate(env, model, args, seed):
     base_env = env.env
     device = base_env.device
     num_envs = base_env.num_envs
     env_ids = torch.arange(num_envs, device=device)
 
     # Give every candidate the same held-out random poses/noise sequence.
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    # Re-seeding per held-out seed keeps the pairing valid: env i under seed s
+    # faces the same spawn, terrain row and sensor noise for every candidate.
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     # Reinstall balanced terrain rows before every candidate.
     rows = env_ids % int(Cfg.terrain.num_rows)
@@ -240,6 +430,7 @@ def _evaluate(env, model, args):
     records = []
     for i in range(num_envs):
         records.append({
+            "seed": seed,
             "env": i,
             "row": int(rows[i].item()),
             "clearance_m": float(clearances[i].item()),
@@ -255,37 +446,11 @@ def _evaluate(env, model, args):
             "final_displacement_x_m": float(distance[i].item()),
         })
 
-    def rate(field, subset):
-        return 100.0 * sum(1 for item in subset if item[field]) / max(1, len(subset))
-
-    by_row = {}
-    for row in sorted(set(int(x) for x in rows.tolist())):
-        subset = [item for item in records if item["row"] == row]
-        by_row[str(row)] = {
-            "clearance_m": round(float(subset[0]["clearance_m"]), 4),
-            "episodes": len(subset),
-            "success_rate_percent": round(rate("success", subset), 1),
-            "pass_rate_percent": round(rate("passed", subset), 1),
-            "outside_gate_rate_percent": round(
-                rate("crossed_outside_gate", subset), 1),
-            "collision_rate_percent": round(rate("collision", subset), 1),
-            "fall_rate_percent": round(rate("fell", subset), 1),
-        }
-
-    summary = {
-        "episodes": len(records),
-        "success_rate_percent": round(rate("success", records), 1),
-        "pass_rate_percent": round(rate("passed", records), 1),
-        "recovery_rate_percent": round(rate("recovered", records), 1),
-        "outside_gate_rate_percent": round(rate("crossed_outside_gate", records), 1),
-        "collision_rate_percent": round(rate("collision", records), 1),
-        "fall_rate_percent": round(rate("fell", records), 1),
-        "mean_max_bar_force_n": round(float(np.mean(
-            [item["max_bar_force_n"] for item in records])), 3),
-        "mean_min_base_height_m": round(float(np.mean(
-            [item["min_base_height_m"] for item in records])), 4),
-        "by_row": by_row,
-    }
+    summary = _summarize(records)
+    summary["seed"] = seed
+    summary["by_row"] = _by_row(records)
+    summary["groups"] = _grouped(
+        records, float(Cfg.terrain.low_bar_target_clearance))
     return summary, records
 
 
@@ -302,7 +467,18 @@ def main():
               "train-matched preserves the randomization saved by the run"),
     )
     parser.add_argument("--seed", type=int, default=7,
-                        help="Held-out seed reused for every candidate.")
+                        help="Single held-out seed, reused for every candidate.")
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", default=None,
+        help=("Held-out seeds reused for every candidate. Formal candidates "
+              "should use two seeds; each seed is paired across candidates."),
+    )
+    parser.add_argument(
+        "--reference", default=None,
+        help=("Candidate label used as the paired-comparison reference. "
+              "Defaults to the first candidate (the baseline when "
+              "--baseline-run is given)."),
+    )
     parser.add_argument(
         "--lateral-init-range", type=float, default=None,
         help="Optional override for spawn lateral half-range [m].",
@@ -388,6 +564,13 @@ def main():
         label = "last" if iteration < 0 else f"{iteration:06d}"
         candidates.append((label, _checkpoint_path(args.run, iteration)))
 
+    seeds = args.seeds if args.seeds else [args.seed]
+    reference_label = args.reference or candidates[0][0]
+    if reference_label not in [label for label, _ in candidates]:
+        parser.error(
+            f"--reference {reference_label} is not one of "
+            f"{[label for label, _ in candidates]}")
+
     result = {
         "protocol": {
             "profile": args.profile,
@@ -400,6 +583,16 @@ def main():
             "pass_margin_m": args.pass_margin,
             "gate_margin_m": args.gate_margin,
             "seed": args.seed,
+            "seeds": seeds,
+            "episodes_per_seed": args.num_envs,
+            "episodes_total_per_candidate": args.num_envs * len(seeds),
+            "paired_comparison": True,
+            "reference": reference_label,
+            "competition_clearance_m": float(Cfg.terrain.low_bar_target_clearance),
+            "clearance_by_row": [
+                round(float(x), 4)
+                for x in Cfg.terrain.robocon_low_bar_clearance_by_level
+            ],
             "lateral_init_half_range_m": Cfg.terrain.y_init_range,
             "yaw_init_half_range_rad": Cfg.terrain.yaw_init_range,
             "observation_noise": bool(Cfg.noise.add_noise),
@@ -410,26 +603,72 @@ def main():
                 "per_env_z_std_m": Cfg.terrain.height_measurements_per_env_z_noise_std,
                 "per_env_probability": Cfg.terrain.height_measurements_per_env_noise_prob,
             },
+            "evaluator_sha256": _sha256(os.path.abspath(__file__)),
+            **_git_state(),
         },
         "candidates": {},
+        "paired_comparisons": {},
     }
+
+    models = []
     for label, checkpoint in candidates:
-        print(f"\n=== evaluating {label}: {checkpoint} ===", flush=True)
+        print(f"\n=== loading {label}: {checkpoint} ===", flush=True)
         model, migration = _load_policy(env, checkpoint)
-        summary, records = _evaluate(env, model, args)
+        models.append((label, checkpoint, model, migration))
+
+    for label, checkpoint, model, migration in models:
+        pooled_records = []
+        per_seed = {}
+        for seed in seeds:
+            print(f"\n=== evaluating {label} (seed {seed}): {checkpoint} ===",
+                  flush=True)
+            seed_summary, seed_records = _evaluate(env, model, args, seed)
+            per_seed[str(seed)] = seed_summary
+            pooled_records.extend(seed_records)
+        summary = _summarize(pooled_records)
+        summary["seed"] = seeds[0] if len(seeds) == 1 else None
+        summary["seeds"] = seeds
+        summary["by_row"] = _by_row(pooled_records)
+        summary["groups"] = _grouped(
+            pooled_records, float(Cfg.terrain.low_bar_target_clearance))
+        summary["per_seed"] = per_seed
         summary["checkpoint"] = checkpoint
         summary["checkpoint_migration"] = migration
-        summary["records"] = records
+        summary["records"] = pooled_records
         result["candidates"][label] = summary
         print(json.dumps({k: v for k, v in summary.items()
-                          if k not in ("records", "by_row")},
+                          if k not in ("records", "by_row", "per_seed")},
                          ensure_ascii=False, indent=2), flush=True)
+        print("grouped:", json.dumps(summary["groups"], ensure_ascii=False),
+              flush=True)
+
+    reference_records = result["candidates"][reference_label]["records"]
+    for label, _, _, _ in models:
+        if label == reference_label:
+            continue
+        comparison = _paired_compare(
+            reference_records, result["candidates"][label]["records"])
+        comparison["reference"] = reference_label
+        comparison["candidate"] = label
+        result["paired_comparisons"][label] = comparison
+        print(f"\npaired {label} vs {reference_label}: "
+              f"delta={comparison['success_delta_percent']:+.2f}pp "
+              f"CI95={comparison['success_delta_ci95_percent']} "
+              f"p={comparison['mcnemar_exact_p']} "
+              f"(discordant {comparison['reference_only_success']}"
+              f"/{comparison['candidate_only_success']})", flush=True)
 
     out = args.out or os.path.join(args.run, "eval_low_bar_isaac.json")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(result, handle, ensure_ascii=False, indent=2)
     print(f"\nwrote {out}")
+    sys.stdout.flush()
+    # Isaac Gym's CUDA teardown segfaults on exit for some driver/GPU
+    # combinations, which would look like a failed evaluation to any script that
+    # checks the exit code even though every artifact was written. Exit on
+    # purpose once the results are on disk.
+    os._exit(0)
 
 
 if __name__ == "__main__":

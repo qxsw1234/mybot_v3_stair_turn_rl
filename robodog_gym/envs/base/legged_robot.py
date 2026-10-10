@@ -110,6 +110,10 @@ class LeggedRobot(BaseTask):
             calls self._post_physics_step_callback() for common computations 
             calls self._draw_debug_vis() if needed
         """
+        # Infos describe events from this physics step only. Keeping the last
+        # episode dict alive across steps makes the runner count one reset
+        # batch repeatedly until another reset happens.
+        self.extras = {}
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim) ## wtw addition
@@ -254,6 +258,11 @@ class LeggedRobot(BaseTask):
         train_env_ids = env_ids[env_ids < self.num_train_envs]
         if len(train_env_ids) > 0:
             self.extras["train/episode"] = {}
+            # Runner uses this private marker to weight metrics by completed
+            # episodes. Without it, one synchronized success batch and many
+            # small collision batches receive equal weight and can make a
+            # healthy policy appear to have nearly 100% collisions.
+            self.extras["train/episode"]["_episode_count"] = len(train_env_ids)
             for key in self.episode_sums.keys():
                 self.extras["train/episode"]['rew_' + key] = torch.mean( # calculate mean over all envs that will be reset
                     self.episode_sums[key][train_env_ids]) # in legged_gy, divived by self.max_episode_length_s
@@ -261,6 +270,7 @@ class LeggedRobot(BaseTask):
         eval_env_ids = env_ids[env_ids >= self.num_train_envs]
         if len(eval_env_ids) > 0:
             self.extras["eval/episode"] = {}
+            self.extras["eval/episode"]["_episode_count"] = len(eval_env_ids)
             for key in self.episode_sums.keys():
                 # save the evaluation rollout result if not already saved
                 unset_eval_envs = eval_env_ids[self.episode_sums_eval[key][eval_env_ids] == -1]
@@ -1408,17 +1418,27 @@ class LeggedRobot(BaseTask):
                                                                             3)  # shape: num_envs, num_bodies, xyz axis
 
         if getattr(self.cfg.terrain, 'robocon_low_bar', False):
-            # Actors are deliberately created robot[0..N-1], bar[0..N-1],
-            # and the low-bar URDF has one rigid body. This gives an exact
-            # collision signal without confusing normal foot-ground contact.
-            bar_start = self.num_envs * self.num_bodies
-            bar_stop = bar_start + self.num_envs
-            if self.all_net_contact_forces.shape[0] < bar_stop:
+            # Never infer simulator-domain rigid-body indices from actor
+            # creation order. Isaac Gym explicitly warns that adding actors
+            # to an earlier env can change tensor layout, and a wrong slice
+            # silently turns robot/ground contacts into low-bar collisions.
+            if len(self.low_bar_actor_handles) != self.num_envs:
                 raise RuntimeError(
-                    'Low-bar contact tensor layout is inconsistent with actor ordering: '
-                    f'need {bar_stop} bodies, got {self.all_net_contact_forces.shape[0]}')
-            self.low_bar_contact_forces = self.all_net_contact_forces[bar_start:bar_stop]
+                    'Expected one low-bar actor per environment, got '
+                    f'{len(self.low_bar_actor_handles)} for {self.num_envs} envs')
+            self.low_bar_body_indices = torch.as_tensor([
+                self.gym.get_actor_rigid_body_index(
+                    self.envs[i], self.low_bar_actor_handles[i], 0,
+                    gymapi.DOMAIN_SIM)
+                for i in range(self.num_envs)
+            ], dtype=torch.long, device=self.device)
+            if (self.low_bar_body_indices < 0).any():
+                raise RuntimeError('Failed to resolve one or more low-bar rigid-body indices')
+            self.low_bar_contact_forces = self.all_net_contact_forces.index_select(
+                0, self.low_bar_body_indices)
         else:
+            self.low_bar_body_indices = torch.empty(
+                0, dtype=torch.long, device=self.device)
             self.low_bar_contact_forces = torch.zeros(
                 self.num_envs, 3, dtype=torch.float, device=self.device)
 
@@ -1997,9 +2017,16 @@ class LeggedRobot(BaseTask):
     def low_bar_relative_state(self):
         """Vectorised bar state relative to each robot base (no gym query).
 
-        Returns a (num_envs, 3) tensor, expressed in the base frame:
+        The legacy three-field contract is retained when loading an old run:
             [forward distance, lateral offset, bar-bottom height above base].
-        Shared by the obstacle_ahead observation and the low_bar_crouch reward.
+
+        New runs append four deployment-relevant fields without reordering the
+        trained legacy inputs:
+            [sin(heading error), cos(heading error), ground clearance, valid].
+
+        The resulting seven-field contract is shared by the obstacle_ahead
+        observation and low-bar rewards. Heading error is gate heading (world
+        +x) minus robot base yaw, matching the localization/map convention.
         """
         num = self.num_envs
         origin = self.env_origins[:num]
@@ -2026,7 +2053,34 @@ class LeggedRobot(BaseTask):
         forward = rel_body[:, 0]
         lateral = rel_body[:, 1]
         bar_bottom_above_base = rel_body[:, 2] - half_thick
-        return torch.stack([forward, lateral, bar_bottom_above_base], dim=-1)
+        legacy_state = torch.stack(
+            [forward, lateral, bar_bottom_above_base], dim=-1)
+
+        observation_width = 3
+        for component in self.cfg.env.policy_observation_components:
+            if component[0] == 'obstacle_ahead':
+                observation_width = int(component[1])
+                break
+        if observation_width == 3:
+            return legacy_state
+        if observation_width != 7:
+            raise RuntimeError(
+                'Unsupported obstacle_ahead width; expected legacy 3 or current 7, '
+                f'got {observation_width}')
+
+        forward_world = quat_apply(self.base_quat[:num], self.forward_vec[:num])
+        base_yaw = torch.atan2(forward_world[:, 1], forward_world[:, 0])
+        heading_error = -base_yaw
+        valid = torch.ones_like(forward)
+        return torch.stack([
+            forward,
+            lateral,
+            bar_bottom_above_base,
+            torch.sin(heading_error),
+            torch.cos(heading_error),
+            clearance,
+            valid,
+        ], dim=-1)
 
     def _update_low_bar_task_state(self):
         """Update exact, one-shot low-bar task events for reward and metrics."""
@@ -2037,6 +2091,10 @@ class LeggedRobot(BaseTask):
         if not getattr(self.cfg.terrain, 'robocon_low_bar', False):
             return
 
+        # index_select must run after every contact-tensor refresh: unlike a
+        # basic slice it returns a copy, not a live view into the Gym tensor.
+        self.low_bar_contact_forces = self.all_net_contact_forces.index_select(
+            0, self.low_bar_body_indices)
         contact_force = torch.linalg.vector_norm(
             self.low_bar_contact_forces, dim=1)
         contact_threshold = float(getattr(

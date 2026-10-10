@@ -272,11 +272,15 @@ Checkpoint 排名顺序：
 
 - 已完成 checkpoint 观测扩维迁移、Low Bar 碰撞/穿越/恢复事件、专用 curriculum 和确定性 Isaac Gym 评测器；
 - 已核验 Isaac Gym 横杆刚体索引，contact tensor 使用的索引与 simulator-domain 真实索引一致；
-- 为防止障碍续训破坏成熟步态，已增加 `--observation-adapter-only`：只训练 10 帧历史中新增的 30 个障碍输入列，原 actor、adaptation module 和动作噪声可冻结；
+- Low Bar Actor observation 已从旧 3 维扩展为 7 维：`forward`、`lateral`、`bar_bottom_above_base`、`sin/cos(heading_error)`、`ground_clearance`、`valid`；旧字段顺序不变，新字段权重从 0 开始；
+- 为防止障碍续训破坏成熟步态，已增加 `--observation-adapter-only`：只训练 10 帧历史中新增障碍输入列，原 actor、adaptation module 和动作噪声可冻结；
 - 参数级 smoke test 确认：新增输入列发生更新，legacy actor 和 adaptation module 的最大参数变化为 0；
-- 当前最佳可追溯候选为 `060698`，在 384 环境协议上的最佳记录为 81.2%；不同批次复测有约 1～4 个百分点波动，因此不使用 96 环境结果宣布达标；
-- `060825`、`060897` 在 96 环境筛选中曾达到 86.5%/85.4%，但 384 环境复测均约 80.2%，不满足 M1；
-- 轻量出生位姿扰动（横向 ±0.05 m、航向 ±0.05 rad）的中点复测未优于居中基线，已回退；默认仍为居中任务，扰动必须通过显式 CLI 参数开启；
+- 评测器现支持 `nominal`/`train-matched`、固定 held-out seed、横向/航向出生扰动和 action-noise 诊断，并把任务碰撞/越界与真实跌倒分开统计；
+- 已修复训练监控的两个统计错误：episode batch 按实际完成数量加权，且每个 physics step 清空旧 `extras`，不再重复累计上一次 reset 的指标；Low Bar 首轮训练也已关闭随机 episode age，避免截断“接近→穿越→恢复”序列；
+- 横向 ±0.05 m、航向 ±0.05 rad 的 `train-matched` 条件下，`060898` 在 384 环境 held-out 协议上约为 70.1%；真实跌倒约 0%，主要失败是门框外穿越约 20% 和横杆/立柱碰撞约 10%；
+- 两轮 7 维 observation adapter-only 训练在 384 环境上约为 70.1% 和 70.6%，没有形成显著提升，说明仅训练新输入列已经到达当前能力上限；
+- 已验证全 actor、小学习率、冻结 adaptation/std、reference-policy anchor 的训练链路。96 环境筛选曾出现 76%～79.2%，但两个独立的 384 环境复测中最佳仅与 70.1% 基线持平；该配置已按门槛停止，不能用小样本峰值晋级；
+- 下一轮不继续堆同配置 iteration。先实现分阶段位姿 curriculum（居中→小横向偏差→小航向偏差→联合 ±0.05），并让 checkpoint 筛选至少使用 384 环境；只有大样本提升达到 2～3 个百分点才启动下一训练块；
 - M1 状态：**未完成**。在连续两个 384 环境 checkpoint 达到 90% 前，不启动 Bridge A 正式训练。
 
 ## 6. Phase 2：Bridge A 专家

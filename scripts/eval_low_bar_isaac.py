@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Deterministic Isaac Gym evaluation for ROBOCON low-bar checkpoints.
+"""Reproducible Isaac Gym evaluation for ROBOCON low-bar checkpoints.
 
 Success requires the whole robot to cross the gate, no contact force on the
 low-bar actor, no early termination, and one second of stable motion after the
 crossing.  Multiple checkpoints share one simulator instance so a training run
-can be ranked quickly and consistently.
+can be ranked quickly and consistently. ``nominal`` removes pose/sensor/dynamics
+randomization, while ``train-matched`` preserves the run's saved randomization
+contract and uses a fixed held-out seed for fair checkpoint comparisons.
 """
 
 import argparse
@@ -103,7 +105,13 @@ def _evaluate(env, model, args):
     num_envs = base_env.num_envs
     env_ids = torch.arange(num_envs, device=device)
 
-    # Reinstall deterministic terrain rows before every candidate.
+    # Give every candidate the same held-out random poses/noise sequence.
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+
+    # Reinstall balanced terrain rows before every candidate.
     rows = env_ids % int(Cfg.terrain.num_rows)
     base_env.terrain_levels[:] = rows
     base_env.env_origins[:] = base_env.terrain_origins[rows, base_env.terrain_types]
@@ -173,12 +181,16 @@ def _evaluate(env, model, args):
         with torch.inference_mode():
             latent = model.adaptation_module(obs["estimator_obs"])
             action = model.actor_body(torch.cat((obs["policy_obs"], latent), dim=-1))
+            if args.action_noise_std > 0.0:
+                action = action + torch.randn_like(action) * args.action_noise_std
         obs, _, done, _ = env.step(action)
 
         current_force = torch.linalg.vector_norm(
             all_contact_forces.index_select(0, bar_body_indices), dim=1)
         max_bar_force = torch.maximum(max_bar_force, current_force)
-        collision |= active & (current_force > args.contact_force_threshold)
+        collision_this_step = active & (
+            current_force > args.contact_force_threshold)
+        collision |= collision_this_step
 
         # rigid_body_state is deliberately the contiguous robot-only slice.
         robot_bodies = base_env.rigid_body_state.view(
@@ -195,7 +207,8 @@ def _evaluate(env, model, args):
         crossed_plane = active & (whole_robot_x > bar_x + args.pass_margin)
         first_crossing = crossed_plane & ~crossed_gate_plane
         inside_gate = body_lateral_extent < opening_half_width
-        crossed_outside_gate |= first_crossing & ~inside_gate
+        missed_gate_this_step = first_crossing & ~inside_gate
+        crossed_outside_gate |= missed_gate_this_step
         just_passed = first_crossing & inside_gate
         crossed_gate_plane |= first_crossing
         passed |= just_passed
@@ -214,7 +227,11 @@ def _evaluate(env, model, args):
         recovered |= stable_steps >= recovery_steps
 
         early = done.bool() & base_env.early_termi_buf.bool()
-        fell |= active & early
+        # Low-bar collisions and missed-gate events intentionally terminate
+        # episodes and are included in early_termi_buf. They are task failures,
+        # not physical falls, so keep the categories mutually meaningful.
+        task_failure_this_step = collision_this_step | missed_gate_this_step
+        fell |= active & early & ~task_failure_this_step
         active &= ~done.bool()
 
     success = passed & recovered & ~collision & ~fell
@@ -279,9 +296,29 @@ def main():
     parser.add_argument("--baseline-run")
     parser.add_argument("--baseline-iteration", type=int, default=59950)
     parser.add_argument("--num-envs", type=int, default=48)
+    parser.add_argument(
+        "--profile", choices=["nominal", "train-matched"], default="nominal",
+        help=("nominal disables pose/sensor/dynamics randomization; "
+              "train-matched preserves the randomization saved by the run"),
+    )
+    parser.add_argument("--seed", type=int, default=7,
+                        help="Held-out seed reused for every candidate.")
+    parser.add_argument(
+        "--lateral-init-range", type=float, default=None,
+        help="Optional override for spawn lateral half-range [m].",
+    )
+    parser.add_argument(
+        "--yaw-init-range", type=float, default=None,
+        help="Optional override for spawn yaw half-range [rad].",
+    )
     parser.add_argument("--duration", type=float, default=8.0)
     parser.add_argument("--recovery-s", type=float, default=1.0)
     parser.add_argument("--vx", type=float, default=0.5)
+    parser.add_argument(
+        "--action-noise-std", type=float, default=0.0,
+        help=("Optional Gaussian action noise for diagnosing the stochastic "
+              "training rollout; deployment evaluation should keep this at 0."),
+    )
     parser.add_argument("--contact-force-threshold", type=float, default=1.0)
     parser.add_argument("--pass-margin", type=float, default=0.05)
     parser.add_argument("--gate-margin", type=float, default=0.02)
@@ -290,13 +327,16 @@ def main():
     parser.add_argument("--sim-device", choices=["cuda:0", "cpu"], default="cuda:0")
     parser.add_argument("--out")
     args = parser.parse_args()
+    if args.action_noise_std < 0.0:
+        parser.error("--action-noise-std must be non-negative")
 
     with open(os.path.join(args.run, "parameters.pkl"), "rb") as handle:
         cfg_dict = pkl.load(handle)["Cfg"]
     load_config(cfg_dict, Cfg)
-    np.random.seed(7)
-    random.seed(7)
-    torch.manual_seed(7)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
 
     Cfg.env.num_envs = args.num_envs
     Cfg.env.episode_length_s = args.duration + 2.0
@@ -306,14 +346,30 @@ def main():
     Cfg.terrain.curriculum = True
     Cfg.terrain.min_init_terrain_level = 0
     Cfg.terrain.max_init_terrain_level = int(Cfg.terrain.num_rows) - 1
-    Cfg.terrain.num_cols = max(12, args.num_envs // int(Cfg.terrain.num_rows))
+    # Environments may reuse terrain origins; scaling num_cols with num_envs
+    # creates a needlessly huge trimesh and can crash large held-out batches.
+    Cfg.terrain.num_cols = max(12, min(int(Cfg.terrain.num_cols), 50))
     Cfg.terrain.border_size = 2.0
     Cfg.terrain.x_init_range = 0.0
-    Cfg.terrain.y_init_range = 0.0
-    Cfg.terrain.yaw_init_range = 0.0
-    Cfg.noise.add_noise = False
+    if args.profile == "nominal":
+        Cfg.terrain.y_init_range = 0.0
+        Cfg.terrain.yaw_init_range = 0.0
+        Cfg.noise.add_noise = False
+        for name in (
+            "height_measurements_per_step_xy_noise_std",
+            "height_measurements_per_step_z_noise_std",
+            "height_measurements_per_env_xy_noise_std",
+            "height_measurements_per_env_z_noise_std",
+            "height_measurements_per_env_noise_prob",
+        ):
+            if hasattr(Cfg.terrain, name):
+                setattr(Cfg.terrain, name, 0.0)
+        _disable_domain_randomization(Cfg)
+    if args.lateral_init_range is not None:
+        Cfg.terrain.y_init_range = args.lateral_init_range
+    if args.yaw_init_range is not None:
+        Cfg.terrain.yaw_init_range = args.yaw_init_range
     Cfg.asset.self_collisions = 1
-    _disable_domain_randomization(Cfg)
     if args.sim_device == "cpu":
         Cfg.sim.use_gpu_pipeline = False
 
@@ -334,14 +390,26 @@ def main():
 
     result = {
         "protocol": {
+            "profile": args.profile,
             "num_envs": args.num_envs,
             "duration_s": args.duration,
             "vx_mps": args.vx,
+            "action_noise_std": args.action_noise_std,
             "recovery_s": args.recovery_s,
             "contact_force_threshold_n": args.contact_force_threshold,
             "pass_margin_m": args.pass_margin,
             "gate_margin_m": args.gate_margin,
-            "seed": 7,
+            "seed": args.seed,
+            "lateral_init_half_range_m": Cfg.terrain.y_init_range,
+            "yaw_init_half_range_rad": Cfg.terrain.yaw_init_range,
+            "observation_noise": bool(Cfg.noise.add_noise),
+            "height_measurement_noise": {
+                "per_step_xy_std_m": Cfg.terrain.height_measurements_per_step_xy_noise_std,
+                "per_step_z_std_m": Cfg.terrain.height_measurements_per_step_z_noise_std,
+                "per_env_xy_std_m": Cfg.terrain.height_measurements_per_env_xy_noise_std,
+                "per_env_z_std_m": Cfg.terrain.height_measurements_per_env_z_noise_std,
+                "per_env_probability": Cfg.terrain.height_measurements_per_env_noise_prob,
+            },
         },
         "candidates": {},
     }

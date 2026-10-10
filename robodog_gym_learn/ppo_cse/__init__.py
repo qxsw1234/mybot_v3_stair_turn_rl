@@ -196,6 +196,15 @@ class Runner:
                     flush=True,
                 )
 
+            if getattr(
+                    self.cfg_ppo.runner, "freeze_adaptation_module", False):
+                for parameter in actor_critic.adaptation_module.parameters():
+                    parameter.requires_grad_(False)
+                print(
+                    "[Resume] Adaptation module frozen for actor fine tuning.",
+                    flush=True,
+                )
+
         if self.cfg_ppo.runner.resume:
             # load pretrained weights from resume_path
             resume_path = self.cfg_ppo.runner.resume_path
@@ -432,26 +441,36 @@ class Runner:
 
                     # log metrics
                     if 'train/episode' in infos:
-                        with logger.Prefix(metrics="train/episode"):
-                            logger.store_metrics(**infos['train/episode'])
-                            # ep_infos.append(infos['train/episode'])
+                        episode_count = _to_scalar(
+                            infos['train/episode'].get('_episode_count', 1.0)) or 1.0
                         for key, value in infos['train/episode'].items():
+                            if key.startswith('_'):
+                                continue
                             scalar = _to_scalar(value)
                             if scalar is None:
                                 continue
-                            train_episode_sums[key] = train_episode_sums.get(key, 0.0) + scalar
-                            train_episode_counts[key] = train_episode_counts.get(key, 0) + 1
+                            train_episode_sums[key] = (
+                                train_episode_sums.get(key, 0.0)
+                                + scalar * episode_count)
+                            train_episode_counts[key] = (
+                                train_episode_counts.get(key, 0.0)
+                                + episode_count)
 
                     if 'eval/episode' in infos:
-                        with logger.Prefix(metrics="eval/episode"):
-                            logger.store_metrics(**infos['eval/episode'])
-                            # ep_infos.append(infos['eval/episode'])
+                        episode_count = _to_scalar(
+                            infos['eval/episode'].get('_episode_count', 1.0)) or 1.0
                         for key, value in infos['eval/episode'].items():
+                            if key.startswith('_'):
+                                continue
                             scalar = _to_scalar(value)
                             if scalar is None:
                                 continue
-                            eval_episode_sums[key] = eval_episode_sums.get(key, 0.0) + scalar
-                            eval_episode_counts[key] = eval_episode_counts.get(key, 0) + 1
+                            eval_episode_sums[key] = (
+                                eval_episode_sums.get(key, 0.0)
+                                + scalar * episode_count)
+                            eval_episode_counts[key] = (
+                                eval_episode_counts.get(key, 0.0)
+                                + episode_count)
                     
                     if 'curriculum' in infos:
 
@@ -502,6 +521,13 @@ class Runner:
             eval_episode_means = {k: eval_episode_sums[k] / eval_episode_counts[k]
                                   for k in eval_episode_sums if eval_episode_counts[k] > 0}
 
+            if train_episode_means:
+                with logger.Prefix(metrics="train/episode"):
+                    logger.store_metrics(**train_episode_means)
+            if eval_episode_means:
+                with logger.Prefix(metrics="eval/episode"):
+                    logger.store_metrics(**eval_episode_means)
+
             logger.store_metrics(
                 # total_time=learn_time - collection_time,
                 time_elapsed=logger.since('start'),
@@ -527,6 +553,7 @@ class Runner:
                 return_std=self.alg.return_std,
                 return_abs_max=self.alg.return_abs_max,
                 action_saturation_fraction=self.alg.action_saturation_fraction,
+                policy_anchor_loss=self.alg.last_policy_anchor_loss,
             )
 
             # Stop before a diverging policy can become the next saved model.

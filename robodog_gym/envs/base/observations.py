@@ -352,8 +352,11 @@ class Observations:
 
         The terrain height scanner samples the ground *below* the robot, so it
         physically cannot see a bar hanging above head height.  This exposes
-        the bar relative to the robot base as three values (all metres):
-            [forward distance, lateral offset, bar-bottom height above base]
+        a stable seven-field contract. The first three legacy fields retain
+        their original positions so old checkpoints can be expanded safely:
+            [forward distance, lateral offset, bar-bottom height above base,
+             sin(heading error), cos(heading error), ground clearance, valid]
+        Distances are metres; heading error is represented by sin/cos.
         It delegates to env.low_bar_relative_state(); in non-low-bar tasks that
         returns zeros so the other task layouts are unaffected.
         """
@@ -471,5 +474,4 @@ class Observations:
     def _calculate_priv_zero(self):
         # boilerplate zero value to use when disabling the estimator, as it's output size can't be zero
         return torch.zeros(self.env.num_envs, 1, dtype=torch.float, device=self.env.device, requires_grad=False)
-
 

@@ -1,3 +1,5 @@
+import copy
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -24,6 +26,22 @@ class PPO:
         self.actor_critic = actor_critic
         self.actor_critic.to(device)
         self.storage = None  # initialized later
+        self.policy_anchor_coef = float(getattr(
+            self.cfg_ppo.algorithm, 'policy_anchor_coef', 0.0))
+        if self.policy_anchor_coef < 0.0:
+            raise ValueError("policy_anchor_coef must be non-negative")
+        if self.policy_anchor_coef > 0.0:
+            self.reference_actor_body = copy.deepcopy(
+                self.actor_critic.actor_body).to(device).eval()
+            self.reference_adaptation_module = copy.deepcopy(
+                self.actor_critic.adaptation_module).to(device).eval()
+            for parameter in self.reference_actor_body.parameters():
+                parameter.requires_grad_(False)
+            for parameter in self.reference_adaptation_module.parameters():
+                parameter.requires_grad_(False)
+        else:
+            self.reference_actor_body = None
+            self.reference_adaptation_module = None
         # The actor and critic have disjoint networks. Keep their optimizers and
         # gradient clipping separate so a return outlier in the critic cannot
         # shrink the actor update through one global gradient norm.
@@ -71,6 +89,7 @@ class PPO:
         self.return_std = 0.0
         self.return_abs_max = 0.0
         self.action_saturation_fraction = 0.0
+        self.last_policy_anchor_loss = 0.0
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, estimator_obs_shape, privileged_obs_shape,
                      action_shape):
@@ -133,6 +152,7 @@ class PPO:
         invalid_critic_updates = 0
         actor_grad_norms = []
         critic_grad_norms = []
+        policy_anchor_losses = []
 
         # Record target and action-tail statistics before storage is cleared.
         # These make reward drift and action clipping visible in the local log.
@@ -228,7 +248,24 @@ class PPO:
             else:
                 value_objective = value_loss
 
-            actor_loss = surrogate_loss - self.cfg_ppo.algorithm.entropy_coef * entropy_batch.mean()
+            policy_anchor_loss = torch.zeros((), device=self.device)
+            if self.reference_actor_body is not None:
+                # torch 1.10 cannot save an inference tensor while building
+                # the MSE backward graph, even when that tensor is the target.
+                with torch.no_grad():
+                    reference_latent = self.reference_adaptation_module(
+                        estimator_obs_batch)
+                    reference_mean = self.reference_actor_body(torch.cat(
+                        (obs_batch, reference_latent), dim=-1))
+                policy_anchor_loss = F.mse_loss(mu_batch, reference_mean)
+                policy_anchor_losses.append(float(
+                    policy_anchor_loss.detach().item()))
+
+            actor_loss = (
+                surrogate_loss
+                - self.cfg_ppo.algorithm.entropy_coef * entropy_batch.mean()
+                + self.policy_anchor_coef * policy_anchor_loss
+            )
             critic_loss = self.cfg_ppo.algorithm.value_loss_coef * value_objective
 
             # Actor gradient step. The KL guard only applies to the policy; the
@@ -332,5 +369,8 @@ class PPO:
         self.invalid_critic_updates = invalid_critic_updates
         self.actor_grad_norm = float(np.mean(actor_grad_norms)) if actor_grad_norms else 0.0
         self.critic_grad_norm = float(np.mean(critic_grad_norms)) if critic_grad_norms else 0.0
+        self.last_policy_anchor_loss = (
+            float(np.mean(policy_anchor_losses))
+            if policy_anchor_losses else 0.0)
 
         return mean_value_loss, mean_surrogate_loss, mean_adaptation_module_loss, mean_decoder_loss, mean_decoder_loss_student, mean_adaptation_module_test_loss, mean_decoder_test_loss, mean_decoder_test_loss_student

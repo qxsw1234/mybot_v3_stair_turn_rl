@@ -22,6 +22,9 @@ def train_mybot_v3_stair_turn(
     resume_action_std=None,
     freeze_resume_action_std=False,
     observation_adapter_only=False,
+    freeze_adaptation_module=False,
+    resume_learning_rate=None,
+    policy_anchor_coef=0.0,
     low_bar_lateral_init_range=0.0,
     low_bar_yaw_init_range=0.0,
 ):
@@ -58,6 +61,17 @@ def train_mybot_v3_stair_turn(
         if resume_action_std is None:
             raise ValueError(
                 "--observation-adapter-only requires --resume-action-std")
+    if freeze_adaptation_module and resume_run is None:
+        raise ValueError("--freeze-adaptation-module requires --resume-run")
+    if resume_learning_rate is not None:
+        if resume_run is None:
+            raise ValueError("--resume-learning-rate requires --resume-run")
+        if resume_learning_rate <= 0.0:
+            raise ValueError("--resume-learning-rate must be positive")
+    if policy_anchor_coef < 0.0:
+        raise ValueError("--policy-anchor-coef must be non-negative")
+    if policy_anchor_coef > 0.0 and resume_run is None:
+        raise ValueError("--policy-anchor-coef requires --resume-run")
 
     Cfg.env.num_envs = num_envs
     Cfg.cfg_ppo.seed = seed
@@ -68,7 +82,11 @@ def train_mybot_v3_stair_turn(
     Cfg.cfg_ppo.runner.resume_action_std = resume_action_std
     Cfg.cfg_ppo.runner.freeze_resume_action_std = freeze_resume_action_std
     Cfg.cfg_ppo.runner.observation_adapter_only = observation_adapter_only
-    Cfg.cfg_ppo.runner.observation_adapter_width = 3
+    Cfg.cfg_ppo.runner.freeze_adaptation_module = freeze_adaptation_module
+    # The low-bar contract preserves the original distance/lateral/vertical
+    # fields and appends heading sin/cos, absolute clearance, and validity.
+    Cfg.cfg_ppo.runner.observation_adapter_width = (
+        7 if robocon_obstacle == "low_bar" else 0)
     Cfg.cfg_ppo.runner.save_interval = save_interval
     Cfg.cfg_ppo.runner.save_video_interval = 0
     Cfg.cfg_ppo.runner.save_curriculum_plot_interval = 250
@@ -484,6 +502,8 @@ def train_mybot_v3_stair_turn(
         Cfg.terrain.low_bar_terminate_on_success = True
         Cfg.terrain.low_bar_alignment_approach = 3.0
         Cfg.terrain.low_bar_alignment_tolerance = 0.15
+        Cfg.terrain.low_bar_heading_tolerance = 0.10
+        Cfg.terrain.low_bar_heading_weight = 1.0
         Cfg.terrain.low_bar_crouch_margin = 0.08
         Cfg.terrain.low_bar_crouch_shaping_span = 0.20
 
@@ -517,8 +537,8 @@ def train_mybot_v3_stair_turn(
         # scanner cannot): append a body-frame bar observation to policy and
         # estimator (must be in both -- estimator activity is keyed on the
         # policy component list).  Widths auto-recompute in Observations.__init__.
-        Cfg.env.policy_observation_components.append(['obstacle_ahead', 3, True])
-        Cfg.env.estimator_observation_components.append(['obstacle_ahead', 3, True])
+        Cfg.env.policy_observation_components.append(['obstacle_ahead', 7, True])
+        Cfg.env.estimator_observation_components.append(['obstacle_ahead', 7, True])
 
         # Keep the bar observation clean: the default noise scale is 1.0 m
         # (noise_level == 1.0), which would swamp a ~3 m signal.
@@ -673,6 +693,7 @@ def train_mybot_v3_stair_turn(
     Cfg.cfg_ppo.algorithm.hard_kl_limit = 0.020 if resume_run else None
     Cfg.cfg_ppo.algorithm.lr_adaptive_schedule_decay = 1.25
     Cfg.cfg_ppo.algorithm.action_clip = Cfg.normalization.clip_actions
+    Cfg.cfg_ppo.algorithm.policy_anchor_coef = policy_anchor_coef
 
     # With a smaller fixed exploration std, a parameter step produces a much
     # larger policy KL. Use a correspondingly smaller actor step so PPO can
@@ -691,6 +712,8 @@ def train_mybot_v3_stair_turn(
         Cfg.cfg_ppo.algorithm.adaptation_module_learning_rate = conservative_lr
     if observation_adapter_only:
         Cfg.cfg_ppo.algorithm.learning_rate = 2.e-6
+    if resume_learning_rate is not None:
+        Cfg.cfg_ppo.algorithm.learning_rate = resume_learning_rate
 
     # Abort before a bad late-stage update can be saved as the new best model.
     Cfg.cfg_ppo.runner.divergence_value_loss_threshold = 25.0 if resume_run else 100.0
@@ -820,7 +843,14 @@ def train_mybot_v3_stair_turn(
     runner = Runner(env, cfg = Cfg, device=f"cuda:{gpu_id}")
     if resume_run is not None and checkpoint >= 0:
         runner.current_learning_iteration = checkpoint
-    runner.learn(num_learning_iterations=iterations, init_at_random_ep_len=True, eval_freq=50)
+    # Random episode ages are useful for stationary locomotion, but they
+    # truncate the approach-pass-recovery sequence on the first low-bar
+    # rollout and leave a short fine-tuning block with almost no successes.
+    runner.learn(
+        num_learning_iterations=iterations,
+        init_at_random_ep_len=robocon_obstacle != "low_bar",
+        eval_freq=50,
+    )
 
 
 if __name__ == '__main__':
@@ -870,7 +900,25 @@ if __name__ == '__main__':
         "--observation-adapter-only",
         action="store_true",
         help=("Freeze the mature actor and train only the input columns for "
-              "the newly appended three-field obstacle observation."),
+              "the newly appended low-bar obstacle observation."),
+    )
+    parser.add_argument(
+        "--freeze-adaptation-module",
+        action="store_true",
+        help="Freeze the resumed estimator while fine tuning the full actor.",
+    )
+    parser.add_argument(
+        "--resume-learning-rate",
+        type=float,
+        default=None,
+        help="Override the actor learning rate for a resumed run.",
+    )
+    parser.add_argument(
+        "--policy-anchor-coef",
+        type=float,
+        default=0.0,
+        help=("Penalize mean-action drift from the policy loaded at the start "
+              "of this run."),
     )
     parser.add_argument(
         "--low-bar-lateral-init-range",
@@ -993,6 +1041,9 @@ if __name__ == '__main__':
         resume_action_std=args.resume_action_std,
         freeze_resume_action_std=args.freeze_resume_action_std,
         observation_adapter_only=args.observation_adapter_only,
+        freeze_adaptation_module=args.freeze_adaptation_module,
+        resume_learning_rate=args.resume_learning_rate,
+        policy_anchor_coef=args.policy_anchor_coef,
         low_bar_lateral_init_range=args.low_bar_lateral_init_range,
         low_bar_yaw_init_range=args.low_bar_yaw_init_range,
     )

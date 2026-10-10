@@ -260,7 +260,19 @@ class CoRLRewards:
         tolerance = float(getattr(
             self.env.cfg.terrain, 'low_bar_alignment_tolerance', 0.15))
         active = (forward > 0.0) & (forward < approach)
-        error = torch.square(lateral / max(tolerance, 1e-6)).clamp(max=4.0)
+        lateral_error = torch.square(
+            lateral / max(tolerance, 1e-6))
+        if rel.shape[1] >= 7:
+            heading_error = torch.atan2(rel[:, 3], rel[:, 4])
+            heading_tolerance = float(getattr(
+                self.env.cfg.terrain, 'low_bar_heading_tolerance', 0.10))
+            heading_weight = float(getattr(
+                self.env.cfg.terrain, 'low_bar_heading_weight', 1.0))
+            heading_error = heading_weight * torch.square(
+                heading_error / max(heading_tolerance, 1e-6))
+        else:
+            heading_error = torch.zeros_like(lateral_error)
+        error = (lateral_error + heading_error).clamp(max=4.0)
         return active.float() * error
 
     def _reward_low_bar_pass(self):

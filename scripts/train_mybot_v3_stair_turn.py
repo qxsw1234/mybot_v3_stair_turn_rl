@@ -16,6 +16,14 @@ def train_mybot_v3_stair_turn(
     resume_run=None,
     checkpoint=-1,
     robocon_obstacle="mixed",
+    allow_observation_expansion=False,
+    save_interval=250,
+    divergence_warmup_iterations=0,
+    resume_action_std=None,
+    freeze_resume_action_std=False,
+    observation_adapter_only=False,
+    low_bar_lateral_init_range=0.0,
+    low_bar_yaw_init_range=0.0,
 ):
 
     import isaacgym
@@ -40,12 +48,28 @@ def train_mybot_v3_stair_turn(
 
     config_mybot_v3(Cfg)
 
+    if observation_adapter_only:
+        if resume_run is None:
+            raise ValueError(
+                "--observation-adapter-only requires --resume-run")
+        if robocon_obstacle != "low_bar":
+            raise ValueError(
+                "--observation-adapter-only is currently defined only for low_bar")
+        if resume_action_std is None:
+            raise ValueError(
+                "--observation-adapter-only requires --resume-action-std")
+
     Cfg.env.num_envs = num_envs
     Cfg.cfg_ppo.seed = seed
     Cfg.cfg_ppo.runner.resume = resume_run is not None
     Cfg.cfg_ppo.runner.resume_path = resume_run
     Cfg.cfg_ppo.runner.checkpoint = checkpoint
-    Cfg.cfg_ppo.runner.save_interval = 250
+    Cfg.cfg_ppo.runner.allow_observation_expansion = allow_observation_expansion
+    Cfg.cfg_ppo.runner.resume_action_std = resume_action_std
+    Cfg.cfg_ppo.runner.freeze_resume_action_std = freeze_resume_action_std
+    Cfg.cfg_ppo.runner.observation_adapter_only = observation_adapter_only
+    Cfg.cfg_ppo.runner.observation_adapter_width = 3
+    Cfg.cfg_ppo.runner.save_interval = save_interval
     Cfg.cfg_ppo.runner.save_video_interval = 0
     Cfg.cfg_ppo.runner.save_curriculum_plot_interval = 250
     Cfg.cfg_ppo.runner.wandb_logging = False
@@ -435,6 +459,14 @@ def train_mybot_v3_stair_turn(
         # be faked with the 2.5D heightfield, so it is a fixed-base, gravity-
         # free actor that the robot collides with.
         Cfg.terrain.robocon_low_bar = True
+        Cfg.env.episode_length_s = 10.0
+        Cfg.terrain.max_init_terrain_level = 2
+        Cfg.terrain.x_init_range = 0.0
+        # Phase 1 defaults to a centred nominal task. Pose perturbations are
+        # explicit CLI-controlled curriculum stages, so a failed robustness
+        # experiment cannot silently become the next run's default.
+        Cfg.terrain.y_init_range = low_bar_lateral_init_range
+        Cfg.terrain.yaw_init_range = low_bar_yaw_init_range
         # Flat ground everywhere: index 6 = "empty" leaves the height field at 0.
         Cfg.terrain.terrain_proportions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
         Cfg.terrain.low_bar_clearance_min = 0.25       # hardest row (lowest bar)
@@ -443,6 +475,29 @@ def train_mybot_v3_stair_turn(
         Cfg.terrain.low_bar_width = 1.0
         Cfg.terrain.low_bar_thickness = 0.05
         Cfg.terrain.low_bar_x = 2.0                    # bar ~2 m ahead of spawn
+        Cfg.terrain.low_bar_contact_force_threshold = 1.0
+        Cfg.terrain.low_bar_pass_margin = 0.05
+        Cfg.terrain.low_bar_gate_margin = 0.02
+        Cfg.terrain.low_bar_stable_roll_pitch = 0.60
+        Cfg.terrain.low_bar_stable_base_height = 0.16
+        Cfg.terrain.low_bar_recovery_steps = 50        # 1 s at 50 Hz
+        Cfg.terrain.low_bar_terminate_on_success = True
+        Cfg.terrain.low_bar_alignment_approach = 3.0
+        Cfg.terrain.low_bar_alignment_tolerance = 0.15
+        Cfg.terrain.low_bar_crouch_margin = 0.08
+        Cfg.terrain.low_bar_crouch_shaping_span = 0.20
+
+        # Stage 1 first proves the task under nominal dynamics. Parameter and
+        # sensor randomization are introduced only after clean success reaches
+        # roughly 80%, otherwise the sparse pass signal is overwhelmed.
+        Cfg.domain_rand.randomize_friction = False
+        Cfg.domain_rand.randomize_restitution = False
+        Cfg.domain_rand.randomize_base_mass = False
+        Cfg.domain_rand.randomize_com_displacement = False
+        Cfg.domain_rand.randomize_motor_strength = False
+        Cfg.domain_rand.randomize_motor_offset = False
+        Cfg.domain_rand.randomize_gravity = False
+        Cfg.domain_rand.randomize_lag_timesteps = False
 
         # Difficulty = terrain row, in the OPPOSITE direction to the stairs:
         # row 0 = highest bar (0.35 m, easiest) ... last row = lowest (0.25 m).
@@ -469,8 +524,16 @@ def train_mybot_v3_stair_turn(
         # (noise_level == 1.0), which would swamp a ~3 m signal.
         Cfg.noise_scales.obstacle_ahead = 0.0
 
-        # Reward shaping: encourage ducking while the bar is still ahead.
+        # Dense shaping teaches the lowering motion. Event rewards define the
+        # actual task and prevent reward hacking by staying crouched or simply
+        # walking around the posts. Event reward functions divide by dt so
+        # these coefficients are the true one-shot reward/penalty magnitudes.
         Cfg.reward_scales.low_bar_crouch = 1.0
+        Cfg.reward_scales.low_bar_alignment = -1.0
+        Cfg.reward_scales.low_bar_pass = 3.0
+        Cfg.reward_scales.low_bar_success = 7.0
+        Cfg.reward_scales.low_bar_collision = -5.0
+        Cfg.reward_scales.low_bar_missed_gate = -5.0
 
 
     # original RSL plane
@@ -601,6 +664,8 @@ def train_mybot_v3_stair_turn(
     Cfg.cfg_ppo.algorithm.value_huber_delta = 5.0 if resume_run else None
     Cfg.cfg_ppo.algorithm.clip_param = 0.10 if resume_run else 0.20
     Cfg.cfg_ppo.algorithm.entropy_coef = 0.002 if resume_run else 0.01
+    if robocon_obstacle == "low_bar" and resume_run:
+        Cfg.cfg_ppo.algorithm.entropy_coef = 0.0 if freeze_resume_action_std else 0.0005
     Cfg.cfg_ppo.algorithm.num_learning_epochs = 3 if resume_run else 5
     Cfg.cfg_ppo.algorithm.max_grad_norm = 0.5 if resume_run else 1.0
     Cfg.cfg_ppo.algorithm.critic_max_grad_norm = 0.5 if resume_run else 1.0
@@ -609,9 +674,28 @@ def train_mybot_v3_stair_turn(
     Cfg.cfg_ppo.algorithm.lr_adaptive_schedule_decay = 1.25
     Cfg.cfg_ppo.algorithm.action_clip = Cfg.normalization.clip_actions
 
+    # With a smaller fixed exploration std, a parameter step produces a much
+    # larger policy KL. Use a correspondingly smaller actor step so PPO can
+    # improve the obstacle policy instead of tripping the hard-KL guard on
+    # nearly every minibatch.
+    if (robocon_obstacle == "low_bar" and resume_run
+            and resume_action_std is not None
+            and resume_action_std <= 0.30):
+        if resume_action_std <= 0.05:
+            conservative_lr = 2.e-7
+        elif resume_action_std <= 0.15:
+            conservative_lr = 1.e-6
+        else:
+            conservative_lr = 5.e-6
+        Cfg.cfg_ppo.algorithm.learning_rate = conservative_lr
+        Cfg.cfg_ppo.algorithm.adaptation_module_learning_rate = conservative_lr
+    if observation_adapter_only:
+        Cfg.cfg_ppo.algorithm.learning_rate = 2.e-6
+
     # Abort before a bad late-stage update can be saved as the new best model.
     Cfg.cfg_ppo.runner.divergence_value_loss_threshold = 25.0 if resume_run else 100.0
     Cfg.cfg_ppo.runner.divergence_patience = 3
+    Cfg.cfg_ppo.runner.divergence_warmup_iterations = divergence_warmup_iterations
 
     #-------------
     # Commands
@@ -696,6 +780,26 @@ def train_mybot_v3_stair_turn(
     Cfg.commands.train_standing_still = True
     Cfg.commands.standing_still_prob = 0.10
 
+    if robocon_obstacle == "low_bar":
+        # An obstacle expert must repeatedly approach the gate. Reverse and
+        # large turn commands let the policy avoid the task while collecting
+        # ordinary locomotion reward, so keep only realistic approach errors.
+        Cfg.commands.heading_command = False
+        Cfg.commands.command_curriculum = False
+        Cfg.commands.resampling_time = Cfg.env.episode_length_s
+        Cfg.commands.lin_vel_x = [0.50, 0.50]
+        Cfg.commands.limit_vel_x = [0.50, 0.50]
+        # Phase 1 validates a centred, straight pass. Lateral/yaw command
+        # perturbations are introduced only after nominal success exceeds the
+        # milestone; otherwise velocity tracking explicitly asks the policy to
+        # leave the gate centre while the task reward asks it to stay there.
+        Cfg.commands.lin_vel_y = [0.0, 0.0]
+        Cfg.commands.limit_vel_y = [0.0, 0.0]
+        Cfg.commands.ang_vel_yaw = [0.0, 0.0]
+        Cfg.commands.limit_vel_yaw = [0.0, 0.0]
+        Cfg.commands.train_standing_still = False
+        Cfg.commands.standing_still_prob = 0.0
+
 
 
 
@@ -736,15 +840,60 @@ if __name__ == '__main__':
     parser.add_argument("--checkpoint", type=int, default=-1)
     parser.add_argument("--robocon-obstacle", choices=["mixed", "stairs", "low_bar"],
                         default="mixed")
+    parser.add_argument(
+        "--allow-observation-expansion",
+        action="store_true",
+        help=("Expand only the known CSE input layers when a resumed checkpoint "
+              "has fewer per-frame observations; new appended fields start at zero."),
+    )
+    parser.add_argument("--save-interval", type=int, default=250)
+    parser.add_argument(
+        "--divergence-warmup-iterations",
+        type=int,
+        default=0,
+        help=("Delay the value-loss divergence guard while a migrated critic "
+              "adapts to a changed observation/reward contract."),
+    )
+    parser.add_argument(
+        "--resume-action-std",
+        type=float,
+        default=None,
+        help=("Reset every action standard deviation after loading a checkpoint; "
+              "use a smaller value for conservative obstacle fine tuning."),
+    )
+    parser.add_argument(
+        "--freeze-resume-action-std",
+        action="store_true",
+        help="Keep --resume-action-std fixed instead of optimizing it.",
+    )
+    parser.add_argument(
+        "--observation-adapter-only",
+        action="store_true",
+        help=("Freeze the mature actor and train only the input columns for "
+              "the newly appended three-field obstacle observation."),
+    )
+    parser.add_argument(
+        "--low-bar-lateral-init-range",
+        type=float,
+        default=0.0,
+        help="Low-bar spawn lateral randomization half-range in metres.",
+    )
+    parser.add_argument(
+        "--low-bar-yaw-init-range",
+        type=float,
+        default=0.0,
+        help="Low-bar spawn yaw randomization half-range in radians.",
+    )
     parser.add_argument("--headless", dest="headless", action="store_true")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.set_defaults(headless=True)
     args = parser.parse_args()
 
+    task_name = "mybot_v3" if args.robocon_obstacle == "mixed" else f"mybot_v3_{args.robocon_obstacle}_expert"
     run_group = (
-        f"mybot_v3_stair_turn_improved_resume_{args.checkpoint:06d}"
+        f"{task_name}_resume_{args.checkpoint:06d}"
         if args.resume_run is not None
-        else "mybot_v3_stair_turn_from_scratch"
+        else f"{task_name}_from_scratch"
     )
     logger.configure(logger.utcnow(f'{run_group}/%Y-%m-%d_%H-%M-%S.%f'),
                      root=Path(f"{MINI_GYM_ROOT_DIR}/runs").resolve(), )
@@ -814,6 +963,18 @@ if __name__ == '__main__':
                   xKey: iterations
                 - yKey: train/episode/curriculum_stair_success/mean
                   xKey: iterations
+                - yKey: train/episode/low_bar_success_rate/mean
+                  xKey: iterations
+                - yKey: train/episode/rew_low_bar_alignment/mean
+                  xKey: iterations
+                - yKey: train/episode/low_bar_pass_rate/mean
+                  xKey: iterations
+                - yKey: train/episode/low_bar_collision_rate/mean
+                  xKey: iterations
+                - yKey: train/episode/low_bar_missed_gate_rate/mean
+                  xKey: iterations
+                - yKey: train/episode/curriculum_low_bar_success/mean
+                  xKey: iterations
                 """, filename=".charts.yml", dedent=True)
 
     train_mybot_v3_stair_turn(
@@ -826,4 +987,12 @@ if __name__ == '__main__':
         resume_run=args.resume_run,
         checkpoint=args.checkpoint,
         robocon_obstacle=args.robocon_obstacle,
+        allow_observation_expansion=args.allow_observation_expansion,
+        save_interval=args.save_interval,
+        divergence_warmup_iterations=args.divergence_warmup_iterations,
+        resume_action_std=args.resume_action_std,
+        freeze_resume_action_std=args.freeze_resume_action_std,
+        observation_adapter_only=args.observation_adapter_only,
+        low_bar_lateral_init_range=args.low_bar_lateral_init_range,
+        low_bar_yaw_init_range=args.low_bar_yaw_init_range,
     )

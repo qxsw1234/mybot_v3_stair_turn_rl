@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from params_proto import PrefixProto
 
 from .actor_critic import ActorCritic
+from .checkpoint_utils import migrate_observation_expansion
 from .rollout_storage import RolloutStorage
 
 
@@ -115,6 +116,86 @@ class Runner:
                                     cfg_ppo=cfg.cfg_ppo,
                                     ).to(self.device)
 
+        def load_resume_weights(weights):
+            if not getattr(self.cfg_ppo.runner, "allow_observation_expansion", False):
+                actor_critic.load_state_dict(state_dict=weights)
+            else:
+                migrated, messages = migrate_observation_expansion(
+                    actor_critic,
+                    weights,
+                    policy_history_length=self.env.policy_obs_history_length,
+                    estimator_history_length=self.env.estimator_obs_history_length,
+                )
+                actor_critic.load_state_dict(state_dict=migrated)
+                print("[Resume] Expanded checkpoint observation inputs:", flush=True)
+                for message in messages:
+                    print(f"  - {message}", flush=True)
+
+            # A mature locomotion policy can carry substantially more action
+            # noise than is safe for obstacle fine tuning.  Allow the caller
+            # to explicitly reset (and optionally freeze) the resumed policy's
+            # standard deviation without editing the source checkpoint.
+            resume_action_std = getattr(
+                self.cfg_ppo.runner, "resume_action_std", None)
+            if resume_action_std is not None:
+                resume_action_std = float(resume_action_std)
+                if resume_action_std <= 0.0:
+                    raise ValueError("resume_action_std must be positive")
+                with torch.no_grad():
+                    actor_critic.std.fill_(resume_action_std)
+                freeze_std = bool(getattr(
+                    self.cfg_ppo.runner, "freeze_resume_action_std", False))
+                actor_critic.std.requires_grad_(not freeze_std)
+                state = "frozen" if freeze_std else "trainable"
+                print(
+                    f"[Resume] Action std reset to {resume_action_std:.3f} "
+                    f"({state}).",
+                    flush=True,
+                )
+
+            if getattr(
+                    self.cfg_ppo.runner, "observation_adapter_only", False):
+                new_width = int(getattr(
+                    self.cfg_ppo.runner, "observation_adapter_width", 3))
+                history_length = int(self.env.policy_obs_history_length)
+                history_width = int(self.env.num_policy_obs)
+                if history_width % history_length:
+                    raise ValueError(
+                        "Policy observation width is not divisible by its "
+                        "history length")
+                step_width = history_width // history_length
+                if new_width <= 0 or new_width >= step_width:
+                    raise ValueError(
+                        f"Invalid observation adapter width {new_width} for "
+                        f"per-frame width {step_width}")
+
+                # Preserve every mature locomotion parameter. Only the input
+                # columns belonging to the newly appended obstacle fields may
+                # change; a gradient hook masks the legacy columns of the same
+                # matrix. The critic remains trainable to fit the new returns.
+                for parameter in actor_critic.actor_body.parameters():
+                    parameter.requires_grad_(False)
+                for parameter in actor_critic.adaptation_module.parameters():
+                    parameter.requires_grad_(False)
+                actor_critic.std.requires_grad_(False)
+                first_weight = actor_critic.actor_body[0].weight
+                first_weight.requires_grad_(True)
+                gradient_mask = torch.zeros_like(first_weight)
+                adapter_columns = []
+                for frame in range(history_length):
+                    stop = (frame + 1) * step_width
+                    start = stop - new_width
+                    gradient_mask[:, start:stop] = 1.0
+                    adapter_columns.extend(range(start, stop))
+                first_weight.register_hook(
+                    lambda gradient: gradient * gradient_mask)
+                print(
+                    "[Resume] Observation-adapter-only fine tuning: "
+                    f"{len(adapter_columns)} actor input columns trainable; "
+                    "legacy actor, adaptation module, and action std frozen.",
+                    flush=True,
+                )
+
         if self.cfg_ppo.runner.resume:
             # load pretrained weights from resume_path
             resume_path = self.cfg_ppo.runner.resume_path
@@ -139,7 +220,7 @@ class Runner:
                     raise FileNotFoundError(f"Resume checkpoint not found: {ckpt_file}")
 
                 weights = torch.load(ckpt_file, map_location=self.device)
-                actor_critic.load_state_dict(state_dict=weights)
+                load_resume_weights(weights)
 
                 if hasattr(self.env, "curricula") and self.cfg_ppo.runner.resume_curriculum:
                     dist_file = os.path.join(os.path.dirname(os.path.dirname(ckpt_file)), "curriculum", "distribution.pkl")
@@ -174,7 +255,7 @@ class Runner:
                 loader = ML_Logger(root="http://escher.csail.mit.edu:8080", #TODO hardcoded!
                                    prefix=resume_path)
                 weights = loader.load_torch(f"checkpoints/{ckpt_name}")
-                actor_critic.load_state_dict(state_dict=weights)
+                load_resume_weights(weights)
 
                 if hasattr(self.env, "curricula") and self.cfg_ppo.runner.resume_curriculum:
                     # load curriculum state

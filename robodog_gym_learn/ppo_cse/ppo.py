@@ -27,17 +27,33 @@ class PPO:
         # The actor and critic have disjoint networks. Keep their optimizers and
         # gradient clipping separate so a return outlier in the critic cannot
         # shrink the actor update through one global gradient norm.
-        self.actor_parameters = list(self.actor_critic.actor_body.parameters()) + \
-                                list(self.actor_critic.adaptation_module.parameters()) + \
-                                [self.actor_critic.std]
+        self.actor_parameters = [
+            parameter
+            for parameter in (
+                list(self.actor_critic.actor_body.parameters())
+                + list(self.actor_critic.adaptation_module.parameters())
+                + [self.actor_critic.std]
+            )
+            if parameter.requires_grad
+        ]
         self.critic_parameters = list(self.actor_critic.critic_body.parameters())
+        if not self.actor_parameters:
+            raise RuntimeError("No trainable actor parameters are configured")
         self.optimizer = optim.Adam(self.actor_parameters, lr=self.cfg_ppo.algorithm.learning_rate)
         critic_learning_rate = getattr(
             self.cfg_ppo.algorithm, 'critic_learning_rate', self.cfg_ppo.algorithm.learning_rate)
         self.critic_optimizer = optim.Adam(self.critic_parameters, lr=critic_learning_rate)
-        self.adaptation_module_optimizer = optim.Adam(
-            self.actor_critic.adaptation_module.parameters(),
-            lr=self.cfg_ppo.algorithm.adaptation_module_learning_rate)
+        adaptation_parameters = [
+            parameter
+            for parameter in self.actor_critic.adaptation_module.parameters()
+            if parameter.requires_grad
+        ]
+        self.adaptation_module_optimizer = (
+            optim.Adam(
+                adaptation_parameters,
+                lr=self.cfg_ppo.algorithm.adaptation_module_learning_rate)
+            if adaptation_parameters else None
+        )
         if self.actor_critic.decoder:
             self.decoder_optimizer = optim.Adam(self.actor_critic.parameters(),
                                                           lr=self.cfg_ppo.algorithm.adaptation_module_learning_rate)
@@ -286,8 +302,10 @@ class PPO:
 
 
 
-                self.adaptation_module_optimizer.zero_grad(set_to_none=True)
-                if bool(torch.isfinite(adaptation_loss).item()):
+                if self.adaptation_module_optimizer is not None:
+                    self.adaptation_module_optimizer.zero_grad(set_to_none=True)
+                if (self.adaptation_module_optimizer is not None
+                        and bool(torch.isfinite(adaptation_loss).item())):
                     adaptation_loss.backward()
                     nn.utils.clip_grad_norm_(self.actor_critic.adaptation_module.parameters(),
                                              self.cfg_ppo.algorithm.max_grad_norm)

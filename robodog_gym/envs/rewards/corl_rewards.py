@@ -224,19 +224,60 @@ class CoRLRewards:
 
         bar_bottom (rel[:, 2]) is the bar's ground clearance measured from the
         base: it is 0 when the base sits level with the bar bottom and grows
-        positive as the robot ducks below it.  We reward that positive margin
-        (capped) only while the bar is ahead, so there is no incentive to stay
-        crouched after passing.  Active only in low-bar mode: elsewhere
-        env.low_bar_relative_state() returns zeros and the gate is False.
+        positive as the robot ducks below it.  A linear clearance score keeps
+        a useful gradient even when the robot starts above the bar; the old
+        positive clamp returned exactly zero in that most important failure
+        region.  The score is active only while the bar is ahead, so there is
+        no incentive to stay crouched after passing.
         """
         rel = self.env.low_bar_relative_state()
         forward = rel[:, 0]                      # + = bar ahead in base frame
         bar_bottom = rel[:, 2]                   # base height below bar bottom
         approach = float(getattr(self.env.cfg.terrain, 'low_bar_crouch_approach', 4.5))
-        margin = float(getattr(self.env.cfg.terrain, 'low_bar_crouch_margin', 0.10))
+        margin = float(getattr(self.env.cfg.terrain, 'low_bar_crouch_margin', 0.08))
+        shaping_span = float(getattr(
+            self.env.cfg.terrain, 'low_bar_crouch_shaping_span', 0.20))
         active = (forward > 0.0) & (forward < approach)
-        crouch = torch.clamp(bar_bottom / margin, 0.0, 1.0)
+        clearance_deficit = torch.clamp(margin - bar_bottom, min=0.0)
+        crouch = 1.0 - torch.clamp(
+            clearance_deficit / max(shaping_span, 1e-6), 0.0, 1.0)
         return active.float() * crouch
+
+    def _reward_low_bar_alignment(self):
+        """Penalize lateral/yaw drift while approaching the gate.
+
+        The lateral component of the body-frame bar vector grows when the
+        robot either walks away from the opening centre or yaws away from it.
+        Using it here avoids a policy that learns to evade the cross-bar by
+        walking around a post.  The term switches off after crossing, so it
+        does not fight the normal post-obstacle gait.
+        """
+        rel = self.env.low_bar_relative_state()
+        forward = rel[:, 0]
+        lateral = rel[:, 1]
+        approach = float(getattr(
+            self.env.cfg.terrain, 'low_bar_alignment_approach', 3.0))
+        tolerance = float(getattr(
+            self.env.cfg.terrain, 'low_bar_alignment_tolerance', 0.15))
+        active = (forward > 0.0) & (forward < approach)
+        error = torch.square(lateral / max(tolerance, 1e-6)).clamp(max=4.0)
+        return active.float() * error
+
+    def _reward_low_bar_pass(self):
+        """One-shot reward when every robot body crosses inside the gate."""
+        return self.env.low_bar_just_passed.float() / self.env.dt
+
+    def _reward_low_bar_success(self):
+        """One-shot reward after a clean pass and stable recovery window."""
+        return self.env.low_bar_success_this_step.float() / self.env.dt
+
+    def _reward_low_bar_collision(self):
+        """One-shot penalty for any physical contact with bar or posts."""
+        return self.env.low_bar_collision_this_step.float() / self.env.dt
+
+    def _reward_low_bar_missed_gate(self):
+        """One-shot penalty when the robot walks around instead of underneath."""
+        return self.env.low_bar_missed_gate_this_step.float() / self.env.dt
 
     def _reward_tracking_contacts_shaped_force(self):
         # penalize nonzero contact forces during swing phase

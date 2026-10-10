@@ -133,6 +133,8 @@ class LeggedRobot(BaseTask):
                                                           )[:, self.feet_indices, 7:10]
         self.foot_positions = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices,
                               0:3]
+
+        self._update_low_bar_task_state()
         
 
         self._post_physics_step_callback()
@@ -192,9 +194,20 @@ class LeggedRobot(BaseTask):
 
             self.reset_buf |= self.body_orientation_termination_buf
 
+        if getattr(self.cfg.terrain, 'robocon_low_bar', False):
+            # A bar/post touch or crossing outside the opening is a task
+            # failure. Successful recovery is also terminal, but it is added
+            # only after early_termi_buf is captured so PPO does not label a
+            # successful episode as a fall.
+            self.reset_buf |= self.low_bar_collision_this_step
+            self.reset_buf |= self.low_bar_missed_gate_this_step
+
         self.early_termi_buf = self.reset_buf.clone() #backup early terminated robodogs
         self.time_out_buf = self.episode_length_buf > self.cfg.env.max_episode_length 
         self.reset_buf |= self.time_out_buf
+        if (getattr(self.cfg.terrain, 'robocon_low_bar', False) and
+                getattr(self.cfg.terrain, 'low_bar_terminate_on_success', True)):
+            self.reset_buf |= self.low_bar_success_this_step
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -255,14 +268,29 @@ class LeggedRobot(BaseTask):
                 self.episode_sums[key][eval_env_ids] = 0.
         # log the number of terminations
         self.extras["train/episode"]["number_of_terminations"] = torch.sum(self.early_termi_buf)
+        if (getattr(self.cfg.terrain, 'robocon_low_bar', False) and
+                len(train_env_ids) > 0):
+            self.extras["train/episode"]["low_bar_success_rate"] = (
+                self.low_bar_success_ever[train_env_ids].float().mean())
+            self.extras["train/episode"]["low_bar_pass_rate"] = (
+                self.low_bar_passed_in_gate[train_env_ids].float().mean())
+            self.extras["train/episode"]["low_bar_collision_rate"] = (
+                self.low_bar_collision_ever[train_env_ids].float().mean())
+            self.extras["train/episode"]["low_bar_missed_gate_rate"] = (
+                self.low_bar_missed_gate_ever[train_env_ids].float().mean())
+            self.extras["train/episode"]["low_bar_max_force"] = (
+                self.low_bar_max_contact_force[train_env_ids].mean())
         # log additional curriculum info
         if self.cfg.terrain.curriculum:
             self.extras["train/episode"]["terrain_level"] = torch.mean(
                 self.terrain_levels[:self.num_train_envs].float())
             if hasattr(self, "curriculum_progress_mean"):
                 self.extras["train/episode"]["curriculum_progress"] = self.curriculum_progress_mean
-                self.extras["train/episode"]["curriculum_stair_success"] = self.curriculum_stair_success_rate
                 self.extras["train/episode"]["curriculum_promotion_rate"] = self.curriculum_promotion_rate
+            if hasattr(self, "curriculum_stair_success_rate"):
+                self.extras["train/episode"]["curriculum_stair_success"] = self.curriculum_stair_success_rate
+            if hasattr(self, "curriculum_low_bar_success_rate"):
+                self.extras["train/episode"]["curriculum_low_bar_success"] = self.curriculum_low_bar_success_rate
         if self.cfg.commands.command_curriculum:
             self.extras["env_bins"] = torch.Tensor(self.env_command_bins)[:self.num_train_envs]
             if self.cfg.commands.num_commands > 3:
@@ -300,6 +328,19 @@ class LeggedRobot(BaseTask):
             self.extras["time_outs"] = self.time_out_buf[:self.num_train_envs]
 
         self.gait_indices[env_ids] = 0
+
+        if getattr(self.cfg.terrain, 'robocon_low_bar', False):
+            self.low_bar_crossed_plane[env_ids] = False
+            self.low_bar_passed_in_gate[env_ids] = False
+            self.low_bar_collision_ever[env_ids] = False
+            self.low_bar_missed_gate_ever[env_ids] = False
+            self.low_bar_success_ever[env_ids] = False
+            self.low_bar_post_pass_stable_steps[env_ids] = 0
+            self.low_bar_max_contact_force[env_ids] = 0.0
+            self.low_bar_collision_this_step[env_ids] = False
+            self.low_bar_missed_gate_this_step[env_ids] = False
+            self.low_bar_just_passed[env_ids] = False
+            self.low_bar_success_this_step[env_ids] = False
 
         for i in range(len(self.lag_buffer)):
             self.lag_buffer[i][env_ids, :] = 0
@@ -656,6 +697,36 @@ class LeggedRobot(BaseTask):
         # Implement Terrain curriculum
         if not self.init_done:
             # don't change on initial reset
+            return
+
+        if getattr(self.cfg.terrain, 'robocon_low_bar', False):
+            # Low-bar difficulty is ordered high-clearance -> low-clearance.
+            # Promote only on a clean pass followed by stable recovery; any
+            # collision, missed opening, fall, or timeout moves one level down.
+            success = self.low_bar_success_ever[env_ids]
+            failure = ~success
+            self.terrain_levels[env_ids] += (
+                success.to(torch.long) - failure.to(torch.long))
+            curriculum_min_level = int(getattr(
+                self.cfg.terrain, 'curriculum_min_terrain_level', 0))
+            configured_max = getattr(
+                self.cfg.terrain, 'curriculum_max_terrain_level', None)
+            curriculum_max_level = (
+                int(self.cfg.terrain.max_terrain_level) - 1
+                if configured_max is None else
+                min(int(configured_max), int(self.cfg.terrain.max_terrain_level) - 1)
+            )
+            self.terrain_levels[env_ids] = torch.clamp(
+                self.terrain_levels[env_ids],
+                min=max(0, curriculum_min_level),
+                max=max(0, curriculum_max_level),
+            )
+            self.env_origins[env_ids] = self.terrain_origins[
+                self.terrain_levels[env_ids], self.terrain_types[env_ids]]
+            self.curriculum_progress_mean = (
+                self.low_bar_passed_in_gate[env_ids].float().mean())
+            self.curriculum_low_bar_success_rate = success.float().mean()
+            self.curriculum_promotion_rate = success.float().mean()
             return
 
         if self.cfg.terrain.legacy_curriculum:
@@ -1316,7 +1387,8 @@ class LeggedRobot(BaseTask):
         # create some wrapper tensors for different slices
         self.root_states = gymtorch.wrap_tensor(actor_root_state)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.net_contact_forces = gymtorch.wrap_tensor(net_contact_forces)[:self.num_envs * self.num_bodies, :]
+        self.all_net_contact_forces = gymtorch.wrap_tensor(net_contact_forces)
+        self.net_contact_forces = self.all_net_contact_forces[:self.num_envs * self.num_bodies, :]
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
         self.base_pos = self.root_states[:self.num_envs, 0:3]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
@@ -1332,8 +1404,38 @@ class LeggedRobot(BaseTask):
 
         self.lag_buffer = [torch.zeros_like(self.dof_pos) for i in range(self.cfg.domain_rand.lag_timesteps+1)]
 
-        self.contact_forces = gymtorch.wrap_tensor(net_contact_forces)[:self.num_envs * self.num_bodies, :].view(self.num_envs, -1,
+        self.contact_forces = self.all_net_contact_forces[:self.num_envs * self.num_bodies, :].view(self.num_envs, -1,
                                                                             3)  # shape: num_envs, num_bodies, xyz axis
+
+        if getattr(self.cfg.terrain, 'robocon_low_bar', False):
+            # Actors are deliberately created robot[0..N-1], bar[0..N-1],
+            # and the low-bar URDF has one rigid body. This gives an exact
+            # collision signal without confusing normal foot-ground contact.
+            bar_start = self.num_envs * self.num_bodies
+            bar_stop = bar_start + self.num_envs
+            if self.all_net_contact_forces.shape[0] < bar_stop:
+                raise RuntimeError(
+                    'Low-bar contact tensor layout is inconsistent with actor ordering: '
+                    f'need {bar_stop} bodies, got {self.all_net_contact_forces.shape[0]}')
+            self.low_bar_contact_forces = self.all_net_contact_forces[bar_start:bar_stop]
+        else:
+            self.low_bar_contact_forces = torch.zeros(
+                self.num_envs, 3, dtype=torch.float, device=self.device)
+
+        self.low_bar_crossed_plane = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device)
+        self.low_bar_passed_in_gate = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_collision_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_missed_gate_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_success_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_collision_this_step = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_missed_gate_this_step = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_just_passed = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_success_this_step = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_post_pass_stable_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device)
+        self.low_bar_max_contact_force = torch.zeros(
+            self.num_envs, dtype=torch.float, device=self.device)
 
         # initialize some data used later on
         
@@ -1925,6 +2027,81 @@ class LeggedRobot(BaseTask):
         lateral = rel_body[:, 1]
         bar_bottom_above_base = rel_body[:, 2] - half_thick
         return torch.stack([forward, lateral, bar_bottom_above_base], dim=-1)
+
+    def _update_low_bar_task_state(self):
+        """Update exact, one-shot low-bar task events for reward and metrics."""
+        self.low_bar_collision_this_step[:] = False
+        self.low_bar_missed_gate_this_step[:] = False
+        self.low_bar_just_passed[:] = False
+        self.low_bar_success_this_step[:] = False
+        if not getattr(self.cfg.terrain, 'robocon_low_bar', False):
+            return
+
+        contact_force = torch.linalg.vector_norm(
+            self.low_bar_contact_forces, dim=1)
+        contact_threshold = float(getattr(
+            self.cfg.terrain, 'low_bar_contact_force_threshold', 1.0))
+        self.low_bar_collision_this_step[:] = contact_force > contact_threshold
+        self.low_bar_collision_ever |= self.low_bar_collision_this_step
+        self.low_bar_max_contact_force[:] = torch.maximum(
+            self.low_bar_max_contact_force, contact_force)
+
+        robot_bodies = self.rigid_body_state.view(
+            self.num_envs, self.num_bodies, 13)
+        bar_x = self.env_origins[:, 0] + float(
+            getattr(self.cfg.terrain, 'low_bar_x', 2.0))
+        pass_margin = float(getattr(
+            self.cfg.terrain, 'low_bar_pass_margin', 0.05))
+        whole_robot_x = robot_bodies[:, :, 0].amin(dim=1)
+        crossed_plane = whole_robot_x > bar_x + pass_margin
+        first_crossing = crossed_plane & ~self.low_bar_crossed_plane
+
+        body_lateral_extent = (
+            robot_bodies[:, :, 1] - self.env_origins[:, 1].unsqueeze(1)
+        ).abs().amax(dim=1)
+        opening_half_width = (
+            0.5 * float(getattr(self.cfg.terrain, 'low_bar_width', 1.0))
+            - float(getattr(self.cfg.terrain, 'low_bar_thickness', 0.05))
+            - float(getattr(self.cfg.terrain, 'low_bar_gate_margin', 0.02))
+        )
+        inside_gate = body_lateral_extent < opening_half_width
+        self.low_bar_just_passed[:] = first_crossing & inside_gate
+        self.low_bar_missed_gate_this_step[:] = first_crossing & ~inside_gate
+        self.low_bar_crossed_plane |= first_crossing
+        self.low_bar_passed_in_gate |= self.low_bar_just_passed
+        self.low_bar_missed_gate_ever |= self.low_bar_missed_gate_this_step
+
+        x, y, z, w = (
+            self.base_quat[:, 0], self.base_quat[:, 1],
+            self.base_quat[:, 2], self.base_quat[:, 3])
+        roll = torch.atan2(
+            2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+        pitch = torch.asin(
+            (2 * (w * y - z * x)).clamp(-1.0, 1.0))
+        stable = (
+            self.low_bar_passed_in_gate
+            & (roll.abs() < float(getattr(
+                self.cfg.terrain, 'low_bar_stable_roll_pitch', 0.6)))
+            & (pitch.abs() < float(getattr(
+                self.cfg.terrain, 'low_bar_stable_roll_pitch', 0.6)))
+            & ((self.base_pos[:, 2] - self.env_origins[:, 2]) > float(getattr(
+                self.cfg.terrain, 'low_bar_stable_base_height', 0.16)))
+        )
+        self.low_bar_post_pass_stable_steps[:] = torch.where(
+            stable,
+            self.low_bar_post_pass_stable_steps + 1,
+            torch.zeros_like(self.low_bar_post_pass_stable_steps),
+        )
+        recovery_steps = int(getattr(
+            self.cfg.terrain, 'low_bar_recovery_steps', 50))
+        recovered = self.low_bar_post_pass_stable_steps >= recovery_steps
+        self.low_bar_success_this_step[:] = (
+            recovered
+            & ~self.low_bar_success_ever
+            & ~self.low_bar_collision_ever
+            & ~self.low_bar_missed_gate_ever
+        )
+        self.low_bar_success_ever |= self.low_bar_success_this_step
 
     def _low_bar_world_pose(self, env_i):
         """World position of the low-bar body origin (cross-bar centre).

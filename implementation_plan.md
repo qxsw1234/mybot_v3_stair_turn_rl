@@ -68,25 +68,25 @@ We modify it **in-place** to support the CSE two-model architecture with larger 
 
 ### C++ Header Changes
 
-#### [MODIFY] [robot_config.h](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/include/robot_config.h)
+#### [MODIFY] [robot_config.h](deploy_cpp/include/robot_config.h)
 - Add CSE-specific dimensions as a second set of constants
 - `NUM_CSE_POLICY_OBS_PER_STEP = 119`, `NUM_CSE_ESTIMATOR_OBS_PER_STEP = 116`
 - `NUM_CSE_HISTORY = 10`, `NUM_HEIGHT_POINTS = 77`
 - `NUM_CSE_PRIVILEGED_OBS = 10`
 
-#### [NEW] [cse_policy_runner.h](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/include/cse_policy_runner.h)
+#### [NEW] [cse_policy_runner.h](deploy_cpp/include/cse_policy_runner.h)
 - Loads two JIT models: `adaptation_module.jit` + `body.jit`
 - Manages observation history (10-frame sliding window) as torch tensors
 - `compute_policy_obs()` / `compute_estimator_obs()` — builds 119/116-dim vectors
 - `step()` — full inference: obs → history → adapt → body → target_dof_pos
 
-#### [NEW] [height_subscriber.h](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/include/height_subscriber.h)
+#### [NEW] [height_subscriber.h](deploy_cpp/include/height_subscriber.h)
 - ROS2 subscriber for `/height_measurements` topic (Float32MultiArray, 77 floats)
 - Thread-safe cached height data
 - `get_measurements()` returns latest height array
 - Flat-terrain fallback when no messages received
 
-#### [MODIFY] [robot_runtime_config.h](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/include/robot_runtime_config.h)
+#### [MODIFY] [robot_runtime_config.h](deploy_cpp/include/robot_runtime_config.h)
 - Add CSE-specific fields: obs_scales, obs_bias, height grid, action_scale, etc.
 - Add `adaptation_module_path`, `body_path`
 - Add `height_topic` field
@@ -95,40 +95,40 @@ We modify it **in-place** to support the CSE two-model architecture with larger 
 
 ### C++ Source Changes
 
-#### [NEW] [cse_policy_runner.cpp](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/src/cse_policy_runner.cpp)
+#### [NEW] [cse_policy_runner.cpp](deploy_cpp/src/cse_policy_runner.cpp)
 - CSE policy inference implementation
 - Observation construction matching training pipeline exactly
 - History management with sliding window
 
-#### [NEW] [height_subscriber.cpp](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/src/height_subscriber.cpp)
+#### [NEW] [height_subscriber.cpp](deploy_cpp/src/height_subscriber.cpp)
 - ROS2 height measurement subscriber implementation
 
-#### [MODIFY] [deploy_node.cpp](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/src/deploy_node.cpp)
+#### [MODIFY] [deploy_node.cpp](deploy_cpp/src/deploy_node.cpp)
 - Add `cse_mode` parameter to select CSE policy runner
 - Wire up height subscriber
 - Use CSE policy runner in `handle_rl()` when CSE mode is active
 
-#### [MODIFY] [robot_runtime_config.cpp](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/src/robot_runtime_config.cpp)
+#### [MODIFY] [robot_runtime_config.cpp](deploy_cpp/src/robot_runtime_config.cpp)
 - Parse new CSE-specific YAML fields
 
 ---
 
 ### Config
 
-#### [NEW] [mybot_v2_1_cse.yaml](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/config/robots/mybot_v2_1_cse.yaml)
+#### [NEW] [mybot_v2_1_cse.yaml](deploy_cpp/config/robots/mybot_v2_1_cse.yaml)
 Extends reference YAML with CSE-specific parameters (obs scales, model paths, height topic, etc.)
 
 ---
 
 ### Python Tools (retained)
 
-#### [KEEP] [export_policy.py](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/scripts/export_policy.py)
-- Export training checkpoint → JIT models
+#### [KEEP] [convert_weights_to_jit_cpu.py](scripts/utils/convert_weights_to_jit_cpu.py)
+- Export training checkpoint → JIT models（上游 `export_policy.py` 在本仓库中已由该脚本承担）
 
 #### [KEEP] Python sim2sim (`deploy/src/`, `deploy/scripts/`)
 - Standalone MuJoCo sim2sim for quick prototyping (no ROS2 needed)
 
-#### [MODIFY] [mujoco_sim_node.py](file:///home/getting/humble/Quadruped/elmap-rl-controller/deploy/code_reference/sim/mujoco_sim_node.py)
+#### [MODIFY] [mujoco_sim_node.py](deploy_cpp/sim/mujoco_sim_node.py)
 - Add height measurement raycasting and publish to `/height_measurements` topic
 
 ---
@@ -174,32 +174,3 @@ transmission_ratio: [6.33,6.33,14.77, 6.33,6.33,14.77, 6.33,6.33,14.77, 6.33,6.3
 2. Test stand-up sequence with low gains
 3. Test RL policy with small velocity commands
 4. Gradually increase command range
-
-
-
-
-@beautifulMention @beautifulMention@beautifulMention@beautifulMention@beautifulMention @beautifulMention @beautifulMention @beautifulMention@beautifulMention@beautifulMention@beautifulMention@beautifulMention 我要针对这个强化学习算法写一个sim2sim以及sim2real的部署代码，首先你要仔细阅读所有相关的代码文件，确定其输入输出维度，我的sim2sim要在mujoco上，然后我的sim2real可以参考我给你的代码@beautifulMention  你参考里面的实现，我所使用的机器人和这个reference中的mybot一致，然后我要求你实现时要考虑架构的合理性，便于调参数调试等，电机底层驱动在lib中@beautifulMention @beautifulMention ，实现在@beautifulMention @beautifulMention @beautifulMention ，然后你的配置文件要合理，注释清晰，我的urdf的关节顺序与我实际机器人的电机id不对应：
-#  ┌────────────────────────────────────────────────────────────┐
-#  │         关节-电机映射说明 (Joint-Motor Mapping)              │
-#  ├────────────────────────────────────────────────────────────┤
-#  │                                                            │
-#  │  所有数组统一按 Policy DOF 顺序索引:                          │
-#  │    DOF  0- 2: FL (Front-Left)  hip, thigh, calf            │
-#  │    DOF  3- 5: FR (Front-Right) hip, thigh, calf            │
-#  │    DOF  6- 8: RL (Rear-Left)   hip, thigh, calf            │
-#  │    DOF  9-11: RR (Rear-Right)  hip, thigh, calf            │
-#  │                                                            │
-#  │  实机电机物理编组 (按 CAN ID):                                │
-#  │    电机  1- 3: FR hip, thigh, calf → 串口 port0            │
-#  │    电机  4- 6: FL hip, thigh, calf → 串口 port0            │
-#  │    电机  7- 9: RL hip, thigh, calf → 串口 port1            │
-#  │    电机 10-12: RR hip, thigh, calf → 串口 port1            │
-#  │                                                            │
-#  │  joint_mapping[policy_dof] = 电机 CAN ID:                  │
-#  │    只需按 policy 顺序填写每个关节对应的电机 ID 即可            │
-#  │    motor_is_reversed 也按相同的 policy 顺序填写               │
-#  │    其余属性 (default_dof_pos 等) 全部按 policy 顺序       
-
-电机传动比注意：joint_transmission_ratio: [6.33, 6.33, 14.77, 6.33, 6.33, 14.77, 6.33, 6.33, 14.77, 6.33, 6.33, 14.77]
-你的配置文件参考我的@beautifulMention 实现，但是其中现在有一些重复的参数，比较冗余。你实现的时候记得避免
-@beautifulMention 请你按照这个这个计划进行执行，然后我要使用cpp来完成，你在deploy_cpp文件中实现这一功能，高程点通过一个ros2话题的订阅来实现获取

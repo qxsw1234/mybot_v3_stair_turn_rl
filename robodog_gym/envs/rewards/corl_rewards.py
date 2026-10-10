@@ -265,16 +265,53 @@ class CoRLRewards:
 
         Returns the worst violation in metres, so the caller's negative scale
         is a penalty per metre above the allowed height.
+
+        Legs and the trunk get different ceilings.  The first M1.3 block used a
+        single 0.06 m margin for every body; the trunk then dominated the term
+        (it sits near the bar edge anyway) and the penalty saturated at an
+        unreachable value, while the collision rate stayed at 5.8%.  The legs
+        are the measured colliders, so they keep the strict ceiling and the
+        rest of the robot only has to avoid a gross violation.
         """
         env = self.env
         if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
             return torch.zeros(env.num_envs, device=env.device)
         window = float(getattr(env.cfg.terrain, 'low_bar_body_top_window', 0.35))
-        safety = float(getattr(env.cfg.terrain, 'low_bar_body_top_safety', 0.06))
+        leg_safety = float(getattr(env.cfg.terrain, 'low_bar_body_top_safety', 0.05))
+        trunk_safety = float(getattr(env.cfg.terrain, 'low_bar_trunk_safety', -0.10))
         x_rel, z, clearance = self._low_bar_window_state()
         inside = (x_rel.abs() <= window).float()
-        excess = torch.clamp(z - (clearance.unsqueeze(1) - safety), min=0.0)
+        leg_mask = self._low_bar_leg_mask()
+        ceiling = clearance.unsqueeze(1) - (
+            leg_mask * leg_safety + (1.0 - leg_mask) * trunk_safety)
+        excess = torch.clamp(z - ceiling, min=0.0)
         return (excess * inside).amax(dim=1)
+
+    def _low_bar_leg_mask(self):
+        """Per-body mask selecting the leg links, cached on first use.
+
+        The bar-contact trace attributed the first contact to a foot or a
+        thigh, so those links carry the strict ceiling.
+        """
+        cached = getattr(self, '_low_bar_leg_mask_cache', None)
+        if cached is not None:
+            return cached
+        env = self.env
+        keys = ('foot', 'calf', 'thigh', 'toe', 'knee', 'shank')
+        names = list(getattr(env, 'body_names', []))
+        if len(names) == env.num_bodies:
+            mask = torch.tensor(
+                [1.0 if any(key in str(name).lower() for key in keys) else 0.0
+                 for name in names],
+                dtype=torch.float, device=env.device)
+        else:
+            mask = None
+        if mask is None:
+            # Fall back to applying the strict ceiling everywhere rather than
+            # silently disabling the term.
+            mask = torch.ones(env.num_bodies, dtype=torch.float, device=env.device)
+        self._low_bar_leg_mask_cache = mask
+        return mask
 
     def _reward_low_bar_recover(self):
         """Reward regaining normal height after the gate.

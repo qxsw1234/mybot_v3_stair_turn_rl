@@ -1957,6 +1957,13 @@ class LeggedRobot(BaseTask):
                 self.low_bar_actor_handles.append(lb_handle)
 
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
+        # Cache the rigid-body order once, while the gym API is still safe to
+        # call: reward terms need it to address specific links by name.
+        try:
+            self.body_names = list(self.gym.get_actor_rigid_body_names(
+                self.envs[0], self.actor_handles[0]))
+        except Exception:
+            self.body_names = []
         for i in range(len(feet_names)):
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0],
                                                                          feet_names[i])

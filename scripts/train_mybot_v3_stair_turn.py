@@ -516,7 +516,10 @@ def train_mybot_v3_stair_turn(
         # constrains the front leg; the crossing-speed term keeps the policy
         # from trading progress for clearance.
         Cfg.terrain.low_bar_body_top_window = 0.35
-        Cfg.terrain.low_bar_body_top_safety = 0.06
+        # Legs get the strict ceiling (they are the measured colliders); the
+        # trunk is allowed above the edge so it cannot dominate the term.
+        Cfg.terrain.low_bar_body_top_safety = 0.05
+        Cfg.terrain.low_bar_trunk_safety = -0.10
         Cfg.terrain.low_bar_recover_distance = 0.35
         Cfg.terrain.low_bar_recover_span = 0.06
         Cfg.terrain.low_bar_crossing_min_vx = 0.25

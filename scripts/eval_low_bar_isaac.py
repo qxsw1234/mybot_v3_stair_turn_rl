@@ -287,7 +287,7 @@ def _load_policy(env, checkpoint_path):
     return model, migration
 
 
-def _evaluate(env, model, args, seed):
+def _evaluate(env, model, args, seed, traces=None):
     base_env = env.env
     device = base_env.device
     num_envs = base_env.num_envs
@@ -362,9 +362,19 @@ def _evaluate(env, model, args, seed):
     max_abs_roll_pitch = torch.zeros(num_envs, device=device)
     start_x = base_env.base_pos[:, 0].clone()
 
+    # Optional per-step trace for the first few environments.  Used by
+    # scripts/analyze_low_bar_trace.py to locate the bar contact in time and to
+    # check whether the robot lowers its body at all before the bar.
+    trace_count = min(int(getattr(args, "trace_envs", 0) or 0), num_envs)
+    trace_rows = [] if (traces is not None and trace_count > 0) else None
+    termination_events = [] if trace_rows is not None else None
+    contact_snapshots = [] if trace_rows is not None else None
+    seen_bar_hits = torch.zeros(num_envs, dtype=torch.bool, device=device)
+    prev_body_x = prev_body_z = None
+
     steps = int(round(args.duration * 50.0))
     recovery_steps = int(round(args.recovery_s * 50.0))
-    for _ in range(steps):
+    for step_index in range(steps):
         base_env.commands[:, 0] = args.vx
         base_env.commands[:, 1] = 0.0
         base_env.commands[:, 2] = 0.0
@@ -382,9 +392,67 @@ def _evaluate(env, model, args, seed):
             current_force > args.contact_force_threshold)
         collision |= collision_this_step
 
+        # Snapshot the whole robot the first time the bar is touched.  This
+        # frame is valid because it is read before the environment can reset.
+        if contact_snapshots is not None:
+            newly_hit = collision_this_step & ~seen_bar_hits
+            if newly_hit[:trace_count].any():
+                hit_index = newly_hit[:trace_count].nonzero().flatten()
+                contact_snapshots.append({
+                    "step": step_index,
+                    "env": hit_index.cpu().numpy(),
+                    "base_x_rel": (
+                        base_env.base_pos[hit_index, 0] - bar_x[hit_index]
+                    ).cpu().numpy(),
+                    "base_z": base_env.base_pos[hit_index, 2].cpu().numpy(),
+                    "x_rel": (
+                        base_env.rigid_body_state.view(
+                            num_envs, base_env.num_bodies, 13
+                        )[hit_index, :, 0] - bar_x[hit_index].unsqueeze(1)
+                    ).cpu().numpy(),
+                    "body_z": base_env.rigid_body_state.view(
+                        num_envs, base_env.num_bodies, 13
+                    )[hit_index, :, 2].cpu().numpy(),
+                    "clearance": clearances[hit_index].cpu().numpy(),
+                    "bar_force_n": current_force[hit_index].cpu().numpy(),
+                })
+            seen_bar_hits |= collision_this_step
+
         # rigid_body_state is deliberately the contiguous robot-only slice.
         robot_bodies = base_env.rigid_body_state.view(
             num_envs, base_env.num_bodies, 13)
+        if trace_rows is not None:
+            trace_rows.append(np.stack([
+                base_env.base_pos[:trace_count, 0].cpu().numpy(),
+                base_env.base_pos[:trace_count, 2].cpu().numpy(),
+                robot_bodies[:trace_count, :, 2].amax(dim=1).cpu().numpy(),
+                current_force[:trace_count].cpu().numpy(),
+                action[:trace_count].abs().amax(dim=1).cpu().numpy(),
+                active[:trace_count].float().cpu().numpy(),
+            ], axis=-1).astype(np.float32))
+            # Which robot body actually touched the bar?  env.step() has already
+            # reset a terminated environment, so the contact forces still belong
+            # to the physics step that caused the termination while the poses
+            # are the respawned ones.  Keep the previous frame's per-body poses.
+            newly_done = (done.bool() & active)[:trace_count]
+            if newly_done.any():
+                env_index = newly_done.nonzero().flatten()
+                robot_contact = torch.linalg.vector_norm(
+                    all_contact_forces[: num_envs * base_env.num_bodies].view(
+                        num_envs, base_env.num_bodies, 3), dim=-1)
+                events = {
+                    "step": step_index,
+                    "env": env_index.cpu().numpy(),
+                    "contact_n": robot_contact[env_index].cpu().numpy(),
+                }
+                if prev_body_x is not None:
+                    events["prev_body_x_rel"] = (
+                        prev_body_x[env_index] - bar_x[env_index].unsqueeze(1)
+                    ).cpu().numpy()
+                    events["prev_body_z"] = prev_body_z[env_index].cpu().numpy()
+                termination_events.append(events)
+            prev_body_x = robot_bodies[:trace_count, :, 0].clone()
+            prev_body_z = robot_bodies[:trace_count, :, 2].clone()
         whole_robot_x = robot_bodies[:, :, 0].amin(dim=1)
         body_lateral_extent = (
             robot_bodies[:, :, 1] - base_env.env_origins[:, 1].unsqueeze(1)
@@ -451,6 +519,35 @@ def _evaluate(env, model, args, seed):
     summary["by_row"] = _by_row(records)
     summary["groups"] = _grouped(
         records, float(Cfg.terrain.low_bar_target_clearance))
+    if trace_rows is not None:
+        traces[(seed, trace_count)] = {
+            "trace": np.stack(trace_rows),          # (steps, envs, 5)
+            "bar_x": bar_x[:trace_count].cpu().numpy(),
+            "clearance_m": clearances[:trace_count].cpu().numpy(),
+            "rows": rows[:trace_count].cpu().numpy(),
+            # np.savez cannot store a list of dicts portably, so keep the
+            # per-env outcome records as JSON text.
+            "records_json": json.dumps(records[:trace_count]),
+            "fields": np.array(["base_x", "base_z", "max_body_z",
+                                "bar_force_n", "action_absmax", "active"]),
+            "body_names": np.array(base_env.gym.get_actor_rigid_body_names(
+                base_env.envs[0], base_env.actor_handles[0])),
+            # Raw actor output is clipped at this value inside the env, so
+            # saturation can only be judged against it, not against unit scale.
+            "clip_actions": np.array(float(Cfg.normalization.clip_actions)),
+            "action_scale": np.array(float(Cfg.control.action_scale)),
+            "termination_events_json": json.dumps([
+                {key: (value.tolist() if hasattr(value, "tolist") else value)
+                 for key, value in event.items()}
+                for event in (termination_events or [])
+            ]),
+            "contact_snapshots_json": json.dumps([
+                {key: (value.tolist() if hasattr(value, "tolist") else value)
+                 for key, value in snapshot.items()}
+                for snapshot in (contact_snapshots or [])
+            ]),
+            "dt_s": 0.02,
+        }
     return summary, records
 
 
@@ -501,6 +598,22 @@ def main():
     parser.add_argument("--stable-roll-pitch", type=float, default=0.6)
     parser.add_argument("--stable-base-height", type=float, default=0.16)
     parser.add_argument("--sim-device", choices=["cuda:0", "cpu"], default="cuda:0")
+    parser.add_argument(
+        "--trace-envs", type=int, default=0,
+        help=("Record a per-step trace for the first N environments and write "
+              "it to --trace-out as an npz for bar-contact diagnosis."),
+    )
+    parser.add_argument(
+        "--trace-out", default=None,
+        help="Destination npz for --trace-envs (default: <out>.trace.npz).",
+    )
+    parser.add_argument(
+        "--ignore-contact-termination", action="store_true",
+        help=("Raise the environment's own bar-contact threshold so a bar hit "
+              "no longer terminates the episode.  The evaluator still records "
+              "the contact, which keeps the pose trace continuous through the "
+              "bar instead of resetting the robot to spawn."),
+    )
     parser.add_argument("--out")
     args = parser.parse_args()
     if args.action_noise_std < 0.0:
@@ -546,6 +659,8 @@ def main():
     if args.yaw_init_range is not None:
         Cfg.terrain.yaw_init_range = args.yaw_init_range
     Cfg.asset.self_collisions = 1
+    if args.ignore_contact_termination:
+        Cfg.terrain.low_bar_contact_force_threshold = 1e9
     if args.sim_device == "cpu":
         Cfg.sim.use_gpu_pipeline = False
 
@@ -619,12 +734,25 @@ def main():
     for label, checkpoint, model, migration in models:
         pooled_records = []
         per_seed = {}
+        traces = {} if args.trace_envs > 0 else None
         for seed in seeds:
             print(f"\n=== evaluating {label} (seed {seed}): {checkpoint} ===",
                   flush=True)
-            seed_summary, seed_records = _evaluate(env, model, args, seed)
+            seed_summary, seed_records = _evaluate(
+                env, model, args, seed, traces)
             per_seed[str(seed)] = seed_summary
             pooled_records.extend(seed_records)
+        if traces:
+            trace_path = args.trace_out or os.path.splitext(
+                args.out or os.path.join(args.run, "eval_low_bar_isaac.json"))[0] \
+                + f".{label}.trace.npz"
+            np.savez_compressed(
+                trace_path,
+                **{f"{seed}_{count}::{key}": value
+                   for (seed, count), payload in traces.items()
+                   for key, value in payload.items()},
+            )
+            print(f"wrote trace {trace_path}", flush=True)
         summary = _summarize(pooled_records)
         summary["seed"] = seeds[0] if len(seeds) == 1 else None
         summary["seeds"] = seeds

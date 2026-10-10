@@ -343,6 +343,56 @@ Checkpoint 排名顺序：
 - M1 状态：**未完成**。在连续两个 checkpoint 用正式协议达到 90% 前，不启动
   Bridge A 正式训练。
 
+### 5.6 M1.3 碰杆诊断（2026-10-10）
+
+工具：`scripts/eval_low_bar_isaac.py --trace-envs N --trace-out X
+[--ignore-contact-termination]` 产出逐步轨迹，`scripts/analyze_low_bar_trace.py`
+出报告。协议：checkpoint `060898`，192 环境，`nominal`（居中、无噪声）与
+`train-matched` 各一次，seed `20261017`。
+
+1. **碰杆不是机身撞的，是前腿撞的。** 18 次首次接触中，6 次是前摆动脚
+   （`FR_foot`）在 `x_rel ≈ -0.05…+0.01 m`、`z = 0.252 / 0.285 / 0.303 m`
+   撞到杆下沿（对应净空 `0.25 / 0.3045 / 0.3318 m`），此时其余三足都在地面；
+   12 次是前大腿（`FL_thigh`）位于 `x_rel ≈ -0.03…-0.05 m`，高度相对杆下沿
+   `-0.009…+0.084 m`。
+2. **躯干还差约 0.30 m 才到杆面**：接触帧 base `x_rel` 中位数 `-0.301`。失败
+   发生在"身体还没到杆"的阶段，不是过杆姿态问题。
+3. **机器人基本没有下蹲。** 接近段 base z 均值 `0.336 m`，过杆窗口内最低 base z
+   中位数 `0.321 m`，即下蹲约 `1.5 cm`；192/192 个 episode 中全身最高点从未低于
+   杆下沿（`fits_under_bar_fraction = 0`），最高刚体 frame z 中位数 `0.367 m`，
+   比 `0.30 m` 净空高约 `0.067 m`。
+4. **动作一直处于裁剪状态。** 该 run 配置 `clip_actions = 3.0`、
+   `action_scale = 0.25`；过杆窗口内网络原始输出 `|max|` 中位数 `4.20`
+   （p95 `4.63`），约 98%～100% 的步至少有一个关节被裁剪，策略在这些步上没有
+   做细节调节的余量。
+5. **杆的碰撞体**是 `resources/objects/low_bar/low_bar.urdf` 的单个刚体：横杆
+   `0.05×1.0×0.05`，两根立柱 `0.05×0.05×0.45` 位于 `|y| = 0.475`。立柱与横杆
+   同属一个刚体，接触张量无法区分，诊断用几何位置区分。
+6. **现有奖励的问题**：`_reward_low_bar_crouch` 只看 base 相对杆下沿的高度
+   （`bar_bottom = clearance - base_z`，满额要求 `base ≤ clearance - 0.08
+   = 0.22 m`），对**前腿抬起没有任何约束**；`reward_scales.base_height = 0`
+   关闭了 base 高度项；也没有"过杆前降低／过杆中保持／通过后恢复"的分段结构。
+
+### 5.7 M1.3 三阶段奖励设计（已定稿，待接入）
+
+阶段划分使用已有的 `low_bar_relative_state()` 前向距离 `forward`（base yaw
+frame）：接近 `0.35 < forward < 2.0`；过杆 `|forward| ≤ 0.35`；通过
+`forward < -0.35`。
+
+- **降低（接近段）**：沿用 `low_bar_crouch`，但把目标从 base 高度改为"过杆窗口
+  内允许的全身最高高度"，并保留速度跟踪；
+- **保持（过杆段）**：新增 `low_bar_body_top`，对**所有刚体**惩罚
+  `max_i(z_i) > clearance - safety`（`safety ≈ 0.05…0.10 m`）。用
+  `rigid_body_state` 计算，`bar_x` 与 clearance 在 env 内均已可用。这是唯一能
+  同时约束前摆脚和前大腿的项，按 §5.6 结论它必须存在；
+- **恢复（通过段）**：新增 `low_bar_recover`，奖励回到正常 base 高度并恢复速度
+  跟踪，防止"全程趴低"；
+- **防作弊**：过杆段加最低前进速度下限（禁止爬行刷成功率）；零命令/站立状态下
+  关闭以上三项。
+
+先按 `scripts/run_low_bar_gate.sh` 的配对协议做 384 环境筛选，只有配对差值区间
+下界大于 0 才加长。
+
 ## 6. Phase 2：Bridge A 专家
 
 Bridge A 先建立“正常速度下稳定居中通过宽桥”的能力，不提前混入 20 cm 窄板。

@@ -373,22 +373,29 @@ Checkpoint 排名顺序：
    = 0.22 m`），对**前腿抬起没有任何约束**；`reward_scales.base_height = 0`
    关闭了 base 高度项；也没有"过杆前降低／过杆中保持／通过后恢复"的分段结构。
 
-### 5.7 M1.3 三阶段奖励设计（已定稿，待接入）
+### 5.7 M1.3 三阶段奖励（已实现并接入训练）
 
 阶段划分使用已有的 `low_bar_relative_state()` 前向距离 `forward`（base yaw
 frame）：接近 `0.35 < forward < 2.0`；过杆 `|forward| ≤ 0.35`；通过
 `forward < -0.35`。
 
-- **降低（接近段）**：沿用 `low_bar_crouch`，但把目标从 base 高度改为"过杆窗口
-  内允许的全身最高高度"，并保留速度跟踪；
-- **保持（过杆段）**：新增 `low_bar_body_top`，对**所有刚体**惩罚
-  `max_i(z_i) > clearance - safety`（`safety ≈ 0.05…0.10 m`）。用
-  `rigid_body_state` 计算，`bar_x` 与 clearance 在 env 内均已可用。这是唯一能
-  同时约束前摆脚和前大腿的项，按 §5.6 结论它必须存在；
-- **恢复（通过段）**：新增 `low_bar_recover`，奖励回到正常 base 高度并恢复速度
-  跟踪，防止"全程趴低"；
-- **防作弊**：过杆段加最低前进速度下限（禁止爬行刷成功率）；零命令/站立状态下
-  关闭以上三项。
+- **降低（接近段）**：沿用 `low_bar_crouch`（scale `1.0`），继续以 base 相对杆
+  下沿的高度做稠密引导；
+- **保持（过杆段）**：新增 `_reward_low_bar_body_top`，对**所有刚体**惩罚
+  `max_i(z_i) > clearance - safety`，`safety = 0.06 m`，窗口 `|x_rel| ≤ 0.35 m`，
+  scale `-100.0`。用 `rigid_body_state` 计算，`bar_x` 与 per-env clearance
+  由 env 的 `low_bar_clearance` 缓冲提供。这是唯一能同时约束前摆脚和前大腿的
+  项，按 §5.6 结论它必须存在；
+- **恢复（通过段）**：新增 `_reward_low_bar_recover`，杆位于身后 0.35 m 以外时
+  奖励 base 回到 `clearance - 0.02` 以上，span `0.06 m`，scale `1.5`，防止
+  "全程趴低"；
+- **防作弊**：新增 `_reward_low_bar_crossing_speed`，过杆窗口内对低于
+  `0.25 m/s` 的前进速度施加惩罚（scale `-4.0`），禁止爬行刷成功率。
+
+训练入口新增 `--low-bar-spec-only`：把 clearance 表限制到比赛规格及以下
+（`0.30 → 0.25 m`，12 行线性），同时保持居中（`y_init_range = yaw_init_range
+= 0`），使 M1.3 的碰杆修正不与位姿纠偏混淆。首个 M1.3 run 从 `060898`
+恢复、2048 环境、1200 次迭代。
 
 先按 `scripts/run_low_bar_gate.sh` 的配对协议做 384 环境筛选，只有配对差值区间
 下界大于 0 才加长。

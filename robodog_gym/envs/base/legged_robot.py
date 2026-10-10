@@ -1456,6 +1456,10 @@ class LeggedRobot(BaseTask):
             self.num_envs, dtype=torch.long, device=self.device)
         self.low_bar_max_contact_force = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device)
+        # Per-env bar ground clearance, refreshed with the task state.  Reward
+        # terms need it without recomputing the per-row table.
+        self.low_bar_clearance = torch.zeros(
+            self.num_envs, dtype=torch.float, device=self.device)
 
         # initialize some data used later on
         
@@ -2108,6 +2112,25 @@ class LeggedRobot(BaseTask):
             self.num_envs, self.num_bodies, 13)
         bar_x = self.env_origins[:, 0] + float(
             getattr(self.cfg.terrain, 'low_bar_x', 2.0))
+
+        # Batched mirror of _low_bar_clearance_for_env: difficulty is the
+        # terrain row, and an explicit per-row table overrides the ramp.
+        num_rows = max(1, int(getattr(self.cfg.terrain, 'num_rows', 1)))
+        levels = self.terrain_levels.clamp(0, num_rows - 1).long()
+        table = getattr(self.cfg.terrain, 'robocon_low_bar_clearance_by_level', None)
+        if table:
+            table_tensor = torch.as_tensor(
+                table, device=self.device, dtype=torch.float32)
+            self.low_bar_clearance[:] = table_tensor[
+                levels.clamp(0, table_tensor.numel() - 1)]
+        else:
+            cmin = float(getattr(self.cfg.terrain, 'low_bar_clearance_min', 0.25))
+            cmax = float(getattr(self.cfg.terrain, 'low_bar_clearance_max', 0.35))
+            if num_rows <= 1:
+                self.low_bar_clearance[:] = cmax
+            else:
+                self.low_bar_clearance[:] = (
+                    cmax + (cmin - cmax) * levels.float() / (num_rows - 1))
         pass_margin = float(getattr(
             self.cfg.terrain, 'low_bar_pass_margin', 0.05))
         whole_robot_x = robot_bodies[:, :, 0].amin(dim=1)

@@ -27,6 +27,7 @@ def train_mybot_v3_stair_turn(
     policy_anchor_coef=0.0,
     low_bar_lateral_init_range=0.0,
     low_bar_yaw_init_range=0.0,
+    low_bar_spec_only=False,
 ):
 
     import isaacgym
@@ -490,6 +491,11 @@ def train_mybot_v3_stair_turn(
         Cfg.terrain.low_bar_clearance_min = 0.25       # hardest row (lowest bar)
         Cfg.terrain.low_bar_clearance_max = 0.35       # easiest row (highest bar)
         Cfg.terrain.low_bar_target_clearance = 0.30    # ROBOCON competition spec
+        if low_bar_spec_only:
+            # M1.3: train the competition clearance and below without changing
+            # the pose distribution at the same time, so a bar-contact fix is
+            # not confounded with an alignment fix.
+            Cfg.terrain.low_bar_clearance_max = Cfg.terrain.low_bar_target_clearance
         Cfg.terrain.low_bar_width = 1.0
         Cfg.terrain.low_bar_thickness = 0.05
         Cfg.terrain.low_bar_x = 2.0                    # bar ~2 m ahead of spawn
@@ -506,6 +512,14 @@ def train_mybot_v3_stair_turn(
         Cfg.terrain.low_bar_heading_weight = 1.0
         Cfg.terrain.low_bar_crouch_margin = 0.08
         Cfg.terrain.low_bar_crouch_shaping_span = 0.20
+        # M1.3 three-phase shaping.  body_top is the term that actually
+        # constrains the front leg; the crossing-speed term keeps the policy
+        # from trading progress for clearance.
+        Cfg.terrain.low_bar_body_top_window = 0.35
+        Cfg.terrain.low_bar_body_top_safety = 0.06
+        Cfg.terrain.low_bar_recover_distance = 0.35
+        Cfg.terrain.low_bar_recover_span = 0.06
+        Cfg.terrain.low_bar_crossing_min_vx = 0.25
 
         # Stage 1 first proves the task under nominal dynamics. Parameter and
         # sensor randomization are introduced only after clean success reaches
@@ -530,7 +544,8 @@ def train_mybot_v3_stair_turn(
                         for i in range(lb_levels)]
         else:
             lb_table = [lb_max]
-        lb_table[lb_levels // 2] = Cfg.terrain.low_bar_target_clearance
+        if not low_bar_spec_only:
+            lb_table[lb_levels // 2] = Cfg.terrain.low_bar_target_clearance
         Cfg.terrain.robocon_low_bar_clearance_by_level = lb_table
 
         # The policy must be able to SEE the overhead bar (the downward height
@@ -549,6 +564,9 @@ def train_mybot_v3_stair_turn(
         # walking around the posts. Event reward functions divide by dt so
         # these coefficients are the true one-shot reward/penalty magnitudes.
         Cfg.reward_scales.low_bar_crouch = 1.0
+        Cfg.reward_scales.low_bar_body_top = -100.0
+        Cfg.reward_scales.low_bar_recover = 1.5
+        Cfg.reward_scales.low_bar_crossing_speed = -4.0
         Cfg.reward_scales.low_bar_alignment = -1.0
         Cfg.reward_scales.low_bar_pass = 3.0
         Cfg.reward_scales.low_bar_success = 7.0
@@ -871,6 +889,12 @@ if __name__ == '__main__':
     parser.add_argument("--robocon-obstacle", choices=["mixed", "stairs", "low_bar"],
                         default="mixed")
     parser.add_argument(
+        "--low-bar-spec-only",
+        action="store_true",
+        help=("Restrict the low-bar clearance table to the competition spec and "
+              "below (0.25..0.30 m).  Used by the M1.3 bar-contact block."),
+    )
+    parser.add_argument(
         "--allow-observation-expansion",
         action="store_true",
         help=("Expand only the known CSE input layers when a resumed checkpoint "
@@ -1046,4 +1070,5 @@ if __name__ == '__main__':
         policy_anchor_coef=args.policy_anchor_coef,
         low_bar_lateral_init_range=args.low_bar_lateral_init_range,
         low_bar_yaw_init_range=args.low_bar_yaw_init_range,
+        low_bar_spec_only=args.low_bar_spec_only,
     )

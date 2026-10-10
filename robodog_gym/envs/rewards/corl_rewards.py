@@ -243,6 +243,69 @@ class CoRLRewards:
             clearance_deficit / max(shaping_span, 1e-6), 0.0, 1.0)
         return active.float() * crouch
 
+    def _low_bar_window_state(self):
+        """Per-body bar-relative x and z plus the per-env bar clearance."""
+        env = self.env
+        bar_x = env.env_origins[:, 0] + float(
+            getattr(env.cfg.terrain, 'low_bar_x', 2.0))
+        bodies = env.rigid_body_state.view(env.num_envs, env.num_bodies, 13)
+        x_rel = bodies[:, :, 0] - bar_x.unsqueeze(1)
+        z = bodies[:, :, 2]
+        return x_rel, z, env.low_bar_clearance
+
+    def _reward_low_bar_body_top(self):
+        """Penalize any rigid body above the bar's lower edge inside the gate.
+
+        Measured failure mode: the robot hits the bar with the front leg, not
+        the trunk.  6 of 18 first contacts were the swinging front foot exactly
+        at the bar's lower edge and 12 of 18 the front thigh within a few
+        centimetres of it, while the trunk was still ~0.3 m short of the bar.
+        _reward_low_bar_crouch only sees the base, so a term over every rigid
+        body is the only way to shape the leg that actually collides.
+
+        Returns the worst violation in metres, so the caller's negative scale
+        is a penalty per metre above the allowed height.
+        """
+        env = self.env
+        if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
+            return torch.zeros(env.num_envs, device=env.device)
+        window = float(getattr(env.cfg.terrain, 'low_bar_body_top_window', 0.35))
+        safety = float(getattr(env.cfg.terrain, 'low_bar_body_top_safety', 0.06))
+        x_rel, z, clearance = self._low_bar_window_state()
+        inside = (x_rel.abs() <= window).float()
+        excess = torch.clamp(z - (clearance.unsqueeze(1) - safety), min=0.0)
+        return (excess * inside).amax(dim=1)
+
+    def _reward_low_bar_recover(self):
+        """Reward regaining normal height after the gate.
+
+        Without this the cheapest way to satisfy the crossing term is to stay
+        flattened for the rest of the episode, which the plan explicitly
+        forbids.
+        """
+        env = self.env
+        if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
+            return torch.zeros(env.num_envs, device=env.device)
+        distance = float(getattr(env.cfg.terrain, 'low_bar_recover_distance', 0.35))
+        span = float(getattr(env.cfg.terrain, 'low_bar_recover_span', 0.06))
+        rel = env.low_bar_relative_state()
+        past = (rel[:, 0] < -distance).float()
+        # root_states also holds the low-bar actors, so slice the robots out.
+        base_z = env.root_states[:env.num_envs, 2]
+        target = env.low_bar_clearance - 0.02
+        return past * torch.clamp((base_z - target) / max(span, 1e-6), 0.0, 1.0)
+
+    def _reward_low_bar_crossing_speed(self):
+        """Keep forward progress under the bar so crawling is not a strategy."""
+        env = self.env
+        if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
+            return torch.zeros(env.num_envs, device=env.device)
+        window = float(getattr(env.cfg.terrain, 'low_bar_body_top_window', 0.35))
+        minimum = float(getattr(env.cfg.terrain, 'low_bar_crossing_min_vx', 0.25))
+        x_rel, _, _ = self._low_bar_window_state()
+        inside = (x_rel.abs() <= window).any(dim=1).float()
+        return inside * torch.clamp(minimum - env.base_lin_vel[:, 0], min=0.0)
+
     def _reward_low_bar_alignment(self):
         """Penalize lateral/yaw drift while approaching the gate.
 

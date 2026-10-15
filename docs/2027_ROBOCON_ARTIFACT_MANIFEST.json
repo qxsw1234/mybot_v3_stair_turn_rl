@@ -1,0 +1,1155 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-10-15T10:56:44.721042+00:00",
+  "source_head_at_capture": "743ef1d9b0cc8088eedee025bed41c4e5b5157db",
+  "source_note": "Capture includes uncommitted closeout changes. The containing Git commit defines the published source snapshot.",
+  "acceptance_note": "Historical and diagnostic results are local evidence, not a passed stage gate. Consult the execution status and next-steps plan. Raw evidence and checkpoint binaries are not published; verification requires local data.",
+  "stage2_open": false,
+  "hardware_validated": false,
+  "checkpoint_files_published": false,
+  "raw_evidence_files_published": false,
+  "checkpoints": [
+    {
+      "checkpoint": "059950",
+      "role": "locomotion_baseline",
+      "run": "runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780",
+      "files": [
+        {
+          "path": "runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780/parameters.pkl",
+          "bytes": 82689,
+          "sha256": "d63c355f22211b324787bcbca02d798cc9b36f13bad3d60c9e0e1d7b9f1d2bac"
+        },
+        {
+          "path": "runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780/checkpoints/ac_weights_059950.pt",
+          "bytes": 7572576,
+          "sha256": "2690cd2862c59ef60f217d7262c7a41ce714e003fe18814bef9f5e62333f23f1"
+        },
+        {
+          "path": "runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780/checkpoints/body_059950.jit",
+          "bytes": 3133736,
+          "sha256": "7543bc5828848c7a647665947ac558c1697367cbd4173f22d7945448e1cbed48"
+        },
+        {
+          "path": "runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780/checkpoints/adaptation_module_059950.jit",
+          "bytes": 1335293,
+          "sha256": "2a73bd53408f0be1c33d24dbd4dd98d5d8885d0b529d55130c625a627ed76789"
+        }
+      ]
+    },
+    {
+      "checkpoint": "064242",
+      "role": "preserved_original",
+      "run": "runs/mybot_v3_low_bar_expert_resume_064043/2026-10-11_14-06-04.613002",
+      "files": [
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064043/2026-10-11_14-06-04.613002/parameters.pkl",
+          "bytes": 81648,
+          "sha256": "cd8f9f997733b5cfc66862de941a1a19f7b32d4bf47e6c13d635b1626531ab5a"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064043/2026-10-11_14-06-04.613002/checkpoints/ac_weights_064242.pt",
+          "bytes": 7930976,
+          "sha256": "f0c541557f30d18af324e3ad0d13a49c5529b6fb3df3866837be951007b2a3a2"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064043/2026-10-11_14-06-04.613002/checkpoints/body_latest.jit",
+          "bytes": 3277096,
+          "sha256": "01a077509828f7de162dd52b80b5f3455106cf6ab05dcee5c0c25d88e0837ef2"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064043/2026-10-11_14-06-04.613002/checkpoints/adaptation_module_latest.jit",
+          "bytes": 1406973,
+          "sha256": "67d8a801767b05b268ce83040ff54a676eba5809301e0126f1e498114ebd2e85"
+        }
+      ]
+    },
+    {
+      "checkpoint": "064341",
+      "role": "research_candidate_not_accepted",
+      "run": "runs/mybot_v3_low_bar_expert_resume_064242/2026-10-12_03-07-21.669914",
+      "files": [
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064242/2026-10-12_03-07-21.669914/parameters.pkl",
+          "bytes": 80898,
+          "sha256": "9661a568eadacc84224ab6c8df72de8ba44e11a0082fd301d2c4ae94b63d2be0"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064242/2026-10-12_03-07-21.669914/checkpoints/ac_weights_064341.pt",
+          "bytes": 7930976,
+          "sha256": "87478faa0f2631cf663fa7055dce0ea057efbe244b1e95e7c37d60e0fbaa6eb6"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064242/2026-10-12_03-07-21.669914/checkpoints/body_latest.jit",
+          "bytes": 3277096,
+          "sha256": "21046cbb8243315ad66be021deda001b65bc8ec5b669c66348add128105a3645"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064242/2026-10-12_03-07-21.669914/checkpoints/adaptation_module_latest.jit",
+          "bytes": 1406973,
+          "sha256": "1179a3f0487b8f0495490af3d840fc22e71dee1568486754451a5d0bf753f8ab"
+        }
+      ]
+    },
+    {
+      "checkpoint": "064400",
+      "role": "research_backup_not_accepted",
+      "run": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899",
+      "files": [
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/parameters.pkl",
+          "bytes": 81720,
+          "sha256": "f8b128a187cef9c1be2f4e06854f015a77fa9a52ab9dd9d50fe69faa2dd4ff3c"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/checkpoints/ac_weights_064400.pt",
+          "bytes": 7930976,
+          "sha256": "06cdf0dc10ff9a706fa871ff4291c01cc3c9fa12c3f798e464ea564d26f5c109"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/checkpoints/body_064400.jit",
+          "bytes": 3277096,
+          "sha256": "1f6282da3d007478d62da310e41716049206788948772403db05d30412b60c6a"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/checkpoints/adaptation_module_064400.jit",
+          "bytes": 1406973,
+          "sha256": "cb35d4bef657cba32e13ad3bf644d2bc9ee08617d63445fd4abad2df186fd3a7"
+        }
+      ]
+    },
+    {
+      "checkpoint": "064540",
+      "role": "rejected_cross_engine_regression",
+      "run": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899",
+      "files": [
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/parameters.pkl",
+          "bytes": 81720,
+          "sha256": "f8b128a187cef9c1be2f4e06854f015a77fa9a52ab9dd9d50fe69faa2dd4ff3c"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/checkpoints/ac_weights_064540.pt",
+          "bytes": 7930976,
+          "sha256": "400f2353177eb2d5f6184767239ea4d9aed56cab50324d7d2bb7fb32c3b37059"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/checkpoints/body_latest.jit",
+          "bytes": 3277096,
+          "sha256": "4b97dab74862b0ba2c15d6d5be3bfee25e29cb4993bf1ab3ca7436ba5f7b1338"
+        },
+        {
+          "path": "runs/mybot_v3_low_bar_expert_resume_064341/2026-10-12_03-45-02.595899/checkpoints/adaptation_module_latest.jit",
+          "bytes": 1406973,
+          "sha256": "16c7ddb12b674e2deacc70ebb9a9c76a5115afb1da27c07c906cb6d45c2748e3"
+        }
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "path": "evaluations/robocon_2027/beam_pursuit_smoke20.json",
+      "bytes": 239108,
+      "sha256": "a34958382ae3bfd8592d4174d53b1943104be60f4169b9c6637934622205e777"
+    },
+    {
+      "path": "evaluations/robocon_2027/beam_pursuit_v2_smoke20.json",
+      "bytes": 279635,
+      "sha256": "48a2585cb8561f804c4fd7e7d407d79fcb9d4f39a5db2dfb756438108897f660"
+    },
+    {
+      "path": "evaluations/robocon_2027/beam_pursuit_v3_smoke20.json",
+      "bytes": 253106,
+      "sha256": "52469c6dd5a837d9fa10bb5566db8e08fc12459e7563693fcf01c5fbe28d1df4"
+    },
+    {
+      "path": "evaluations/robocon_2027/beam_smoke20_059950.json",
+      "bytes": 162214,
+      "sha256": "0bec0e90757422383950151a15b48d26c41b20787035925771a9a63672835b93"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_isaac_rules_aabb_smoke48.json",
+      "bytes": 80835,
+      "sha256": "05eb77c29e1f842ae5c44e1f9678effd0d67dc16d7fb7f96e933530f053a6373"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_isaac_rules_aabb_smoke48.trace.npz",
+      "bytes": 115254,
+      "sha256": "0014b3ce7ec5da53a5aa9615db40daf9176615d77cdafce4cb32821ac8436142"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_isaac_rules_aabb_stage100.json",
+      "bytes": 114658,
+      "sha256": "3102cd260b7ed6bad44bc7b4b91122b10a855b7399c78374d896d3c00ab0cd0e"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_isaac_rules_smoke48.json",
+      "bytes": 73744,
+      "sha256": "4a497b38e341eab1424e52dd839f8e585c40385779789eb581d1cf1bc139648a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_isaac_rules_smoke48.trace.npz",
+      "bytes": 121943,
+      "sha256": "4ae0b721351205a76eb13dc741a2a09c6681b48f3108a64b0e0dd1044b13c892"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_mujoco_rules_stage100.json",
+      "bytes": 585179,
+      "sha256": "8de21f290f67c3391aab5c2fc2bcf36c587356b47a4857c09fc8e3a06b55c2ab"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_stage036_windowfix_smoke48.json",
+      "bytes": 80931,
+      "sha256": "1521a0281a4c18e3b9a3f97f99968c28e64484cfb7517d3de5a012994b37d038"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063296_stage1_zero_smoke24.json",
+      "bytes": 65761,
+      "sha256": "75a8452592d6ad63138c412e8aca23304f02ac230d21e0605fe15be9d5a0cd57"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063310_canary_vs_063296_smoke48.json",
+      "bytes": 159951,
+      "sha256": "f6e39e354660a74c0265a9cfe85c4d4c8e2f236e83335c0562713406cd55e963"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063335_rev2_vs_063296_stage036_smoke48.json",
+      "bytes": 159874,
+      "sha256": "06c9764a395101e8b5b55cc519a5357071f41008aa1986e10dbd75e7e47cccec"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063355_poseguide_vs_063296_stage036_smoke48.json",
+      "bytes": 160104,
+      "sha256": "262c28b29517ddc563845563f2f3b8f1a62f455eb198ba39ac5f072b6775feb8"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063375_stage036_vs_063296_smoke48.json",
+      "bytes": 160148,
+      "sha256": "2de213d6a6b97561e53b5d5727631df0dc43092a5b6bab9416da4b13f002a338"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063375_stage1_fixed_vs_063296_smoke48.json",
+      "bytes": 160448,
+      "sha256": "610931125e4bc6357e538f27af76634342b500f3e041d83a2f888097d7dadf86"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063375_stage1_vs_063296_smoke48.json",
+      "bytes": 160421,
+      "sha256": "6509a5d483a150f95fb114240692a2e941b57556adcc12aa2c3767b7c4357888"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063400_stage036_smoke48.json",
+      "bytes": 80881,
+      "sha256": "84b858f8b1c2fb04628fb54cacfd57ee920e2cf66df99d56cf292f2bc0446228"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063415_pretrain_vs_063296_stage1_smoke48.json",
+      "bytes": 160490,
+      "sha256": "256dddf9cb56e10933513726af8560a2529fec274998b26f7b3a5e0aaf4cd8f8"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063450_stage036_smoke48.json",
+      "bytes": 80899,
+      "sha256": "d99a4ef0719b128cd4ee780607874c9612d2d3a7453a1aeddaafe92d24f35649"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063595_crawl_vs_063296_stage1_smoke48.json",
+      "bytes": 159049,
+      "sha256": "cfea49b3ef84700097ad66e9cc6ad0eb5ab1bc857538a767c4ca4c4e68d18206"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_063844_crawl_vs_063595_stage1_smoke48.json",
+      "bytes": 159033,
+      "sha256": "d690583363077baebe0a84295aae2d772c7ca1e4ecdda484870faad55c98585c"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064043_exit_vs_063844_stage1_smoke48.json",
+      "bytes": 160808,
+      "sha256": "ac74ce9432e68465037adc07c721f85445a37907b9503094bb2c660082a7e418"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064043_x000_stage1_smoke48.json",
+      "bytes": 81591,
+      "sha256": "eab078daffe12e1b00e4d1f1e40b6ce87d960d3bfa4205698d7bbc4a08379fc3"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064043_x050_stage1_smoke48.json",
+      "bytes": 81510,
+      "sha256": "8732dabf51b69807e09f36eaaaec5f6cfbb5a85e410256279c9ad89ba0e8d583"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064043_x100_stage1_smoke48.json",
+      "bytes": 81469,
+      "sha256": "be06d9720181f9e7b0e8297556e757ae91d1fcbaac05d945b7d3df354d45fe15"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_initial_obs.json",
+      "bytes": 20124,
+      "sha256": "0074e5ea3398ea1ca86ea70e3f097d7bb549be26dbfbbfb3c72488cbc0a834eb"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_initial_obs.npz",
+      "bytes": 54222,
+      "sha256": "656851dfb44b00653870d49643095f9f3e0b359152f4feac796be5d27261f1da"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_joint_trace1.json",
+      "bytes": 20197,
+      "sha256": "b41aaca7699c00c52006ab4651d79104df46c61e83564c6dbea4cbb1984faee0"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_joint_trace1.npz",
+      "bytes": 82716,
+      "sha256": "3a821d557ab974c609a423135500b5b7a699c5fa9cecaec102f36426ce50d5a7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_joint_trace48env0.json",
+      "bytes": 81697,
+      "sha256": "a0df055d1baa5e3709198167f2dcc42fa4c62ac0c07acf543a0839b6b7e1ae97"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_joint_trace48env0.npz",
+      "bytes": 82899,
+      "sha256": "d08dfe80b1e185ce6c4f2915687511adf2091083e24cbaad15eb6d6f879580be"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_joint_trace_x200.json",
+      "bytes": 81709,
+      "sha256": "b6c985a7d9fab1cfca652d05cb268389f6fd61a40ab4c831dab2b19c17ce04a8"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_joint_trace_x200.npz",
+      "bytes": 82859,
+      "sha256": "43fc416d53caa1797527e626f0d0653ef8dfde59de682bb4296dd6ff8d7cc5c8"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_nominal_y03_yaw2_48.json",
+      "bytes": 81491,
+      "sha256": "8fbde78bbc525b0172e5e4a276a83d0a28745d9f912a3f80fc1cb36b103aec0a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_isaac_x200_y03_yaw2_48.json",
+      "bytes": 81507,
+      "sha256": "6aab507f7301a8e760cc4d54ca84b18ccc6d194486fd313b702f93063dc6e88b"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_aabb_t150.json",
+      "bytes": 5126,
+      "sha256": "d8e86cf34bfeaeb5e4bdf4b0e1f896f28ea6459770dee21cbdd4e367b09e58ed"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_aabb_t152.json",
+      "bytes": 4396,
+      "sha256": "e44c48e806d6b1e2ef45ada50a2cc1e4715731965b0fe8c805cc48b9a79ea3bf"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_aabb_t154.json",
+      "bytes": 4390,
+      "sha256": "4531a0c57424fa636d446267bfba54d0e9ae3ed13913ae923c1b53cc071b8483"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_aabb_t155_long.json",
+      "bytes": 13253,
+      "sha256": "28317220d754d747fd52f340c9bf0d630c006ff4786b1913d861ccbbd08866f6"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_aabb_t156.json",
+      "bytes": 3828,
+      "sha256": "541f19ac619e0f81c5396ff07d325d950428a0928b466217e60fb2f541996ffb"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_center_t140.json",
+      "bytes": 3376,
+      "sha256": "e0947358061aea88c70469963f21b29817092db400c0db3d9542bef5d6f691c4"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_center_t145.json",
+      "bytes": 4782,
+      "sha256": "d37baadf87476e250096ff7e0c6f9008115ff48330c84c36ea8eb64a792617a6"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_center_t150.json",
+      "bytes": 5126,
+      "sha256": "d8e86cf34bfeaeb5e4bdf4b0e1f896f28ea6459770dee21cbdd4e367b09e58ed"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_center_t155.json",
+      "bytes": 11237,
+      "sha256": "b44ce9fca9db0aa9d9a186e1d5d61d7a6e6229097f4de3a735848249029662be"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_center_t160.json",
+      "bytes": 5777,
+      "sha256": "ac07d47ed0375f196899694f73eb81e15042f0b935a806352a46010128437cec"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_corrected_damping3_unclipped_regression120_seed2028.json",
+      "bytes": 942829,
+      "sha256": "0568d05b27ae2f52db5fedb6ad81074a126285c5f47c9c5c35305d6e36bd04bc"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_corrected_damping4_regression120_seed2028.json",
+      "bytes": 1487766,
+      "sha256": "bca272e53a80dfd02203c2f5e95b2844afb1f47c6644e48845f702f643102706"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_corrected_damping4_smoke24_seed2027.json",
+      "bytes": 292807,
+      "sha256": "c0a3060b019702642efd5ae3cdda199cd84a0dfdab17d779060c98a29d69c855"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_corrected_damping4_unclipped_regression120_seed2028.json",
+      "bytes": 1417814,
+      "sha256": "345cd544181a408886ee2377ca68f30efd5620a8e98a4eca00f55a8af812ffe9"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_corrected_damping4_unclipped_smoke24_seed2027.json",
+      "bytes": 258908,
+      "sha256": "a23de36cdf39f3f66a7220e5ab31c6f4fe216ec784494dc8666c189deddb855f"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_corrected_smoke24_seed2027.json",
+      "bytes": 103855,
+      "sha256": "f537526a10fd02f36381e75dca8489864f9db390c122e96ee9c2a5a180f0fd1e"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_crouch05_probe1.json",
+      "bytes": 7194,
+      "sha256": "8264ef5093b35246e957c280cef09a34a6bc6a4a76a47091a489c0738684d483"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_crouch10_probe1.json",
+      "bytes": 5612,
+      "sha256": "d47474591e22d31f068ecc9820345c39283281064f8339c6d6e584d09d8354a1"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping2_probe1.json",
+      "bytes": 6466,
+      "sha256": "95ca2346002580b1aeb42c14d4cabedfc52e2aae79187de27db4931137c8ee40"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping2p5_probe1.json",
+      "bytes": 10816,
+      "sha256": "d104e875183ce94773b186959a0c7aca47e34bdd2626065541dec12e7237f33e"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping2p5_smoke24.json",
+      "bytes": 243123,
+      "sha256": "79d3c099839af8cce8a69c5488f14d661c1b04722db419c953efe5c8b98a060a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping3_probe1.json",
+      "bytes": 12556,
+      "sha256": "3a5a122f321e4b40b28fc8f9cff1f23d34c7831a30ebd4506314cfa781ee9c59"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping3_smoke24.json",
+      "bytes": 285131,
+      "sha256": "bcbd8de658f25dfc9c26df4b649bd3d4f76f035004d3f9bcdeadbe2d14b8b3c0"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping3p5_probe1.json",
+      "bytes": 12814,
+      "sha256": "92caae8ac4a884b249a7ca6df24e0755f892f6861d94c273dee8602998a39656"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping3p5_smoke24.json",
+      "bytes": 304265,
+      "sha256": "e08f67c2a89ee24aca0a269576bbb2341257ffa408b533c85f1cfac6b15100c2"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping4_probe1.json",
+      "bytes": 13280,
+      "sha256": "02e8ce77618b4f91a37fd143401cc0f14cc5ce4f383b91223bd0ff70ad46c106"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping4_regression120_seed2028.json",
+      "bytes": 1428716,
+      "sha256": "1b42acf9a8202d9f67e9b5cd7f05372461134cf01c21f88449af09e18adcbc88"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_damping4_smoke24.json",
+      "bytes": 283659,
+      "sha256": "52f18048a4fd33889862c919d86cdafc58bd574df7e569d23f2620fbf09a99ab"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_default_unclipped_thigh155_smoke24_seed2027.json",
+      "bytes": 133677,
+      "sha256": "a93831f07d2988835be2697882eacfc88665de4fd28730c139bda45da717b996"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_full_isaac_dynamics_probe1.json",
+      "bytes": 4327,
+      "sha256": "c0b7743eb6f62464e3d1542dae2b29db59ed41bc6ea01f4bd2eabb983024ce67"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_initial_obs.json",
+      "bytes": 643186,
+      "sha256": "8ba431faa116143c639be8fecb4651ea192f07226eea63599fddc51f05701b24"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_isaac_mass_inertia_default_control_probe1.json",
+      "bytes": 13302,
+      "sha256": "151662fade5adad4fe46be3d0ea49f46e5c87445933e5d96592d8757bf43d31f"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_isaac_mass_inertia_default_control_smoke24.json",
+      "bytes": 159897,
+      "sha256": "d566670a32c538472ee7d2207c2e48767aded5aff3fa325b596083d78ce80849"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_isaac_mass_inertia_unclipped_probe1.json",
+      "bytes": 4986,
+      "sha256": "c60955ab4a9db86ab6d0862a21734e65f3cffa8adf42fcaf8725633e7ea64869"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_isaac_reset_default_probe1.json",
+      "bytes": 10369,
+      "sha256": "7bad503e7474774290fae74f488e37530b01e348b299e0749e38d763b7e51abf"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_isaac_reset_default_smoke24.json",
+      "bytes": 123141,
+      "sha256": "c28402a10c3d1b387df35e97f09894d08398ccf0ee27673823f35e79f25d4d37"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_isaac_reset_full_probe1.json",
+      "bytes": 4406,
+      "sha256": "5220e00e3273a5f30ebe966e524ad0f0de12c60239b3c2759e75c4b518bb94a7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_joint_trace1.json",
+      "bytes": 945098,
+      "sha256": "06c505c3e6c32fc0cf4fec1c20308be32912e5df43bbd12b7d680e0271aff139"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_matched_mass_pursuit040_probe1.json",
+      "bytes": 5118,
+      "sha256": "76029cabf60a6674dbb2d5ae2c695bb4dd922078bbbbbdd42f52865e1cfe4b27"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_matched_mass_t155_probe1.json",
+      "bytes": 5573,
+      "sha256": "8e1e389f3ddffc2643586176794f06b3e198c26be01a67d0557aed7ac9e15a0f"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_matched_payload1_probe1.json",
+      "bytes": 4717,
+      "sha256": "eafb536c51b633775bc7c2dd7a41e6b2f043136ad42e41f9b76a65874b066279"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_matched_payload1_unclipped_probe1.json",
+      "bytes": 4604,
+      "sha256": "c616a1a3791fefae119fbdd1e8724639ddcda19e7e66ec3f9c7ba65eee4738bc"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_matched_reset_command_probe1.json",
+      "bytes": 868003,
+      "sha256": "4041469e91c506deba55668f20ee1c1a2d8453494115141e70b1471f4587f2ac"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_matched_reset_command_smoke24.json",
+      "bytes": 165080,
+      "sha256": "a9cb8f016ea98cb17969cc43f75c3698e8c848eaca542f7b32a249a001a8dd78"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_probe1.json",
+      "bytes": 6753,
+      "sha256": "f39cfb669ebddeb9884d68f1bdacf3262cf8b308a03e78e7274572b624d84d7a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_probe1_contactpart.json",
+      "bytes": 3330,
+      "sha256": "f71f200731b721e3656a26eb9e8ef0cbbe2aeac0bf14feb3c33be436b167d1cd"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_probe1_strict.json",
+      "bytes": 3208,
+      "sha256": "fb376c1377510ad52e9dae90a7c44eb9eead87b777ab496a93c977e4cba0e3d6"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_probe1_topz.json",
+      "bytes": 3376,
+      "sha256": "e0947358061aea88c70469963f21b29817092db400c0db3d9542bef5d6f691c4"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_refresh_default_probe1.json",
+      "bytes": 5659,
+      "sha256": "0548fb66bde8d5f0623af0d7ce09faa11da66857b55bdf0b3ec7b9bc5b02eec9"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_refresh_full_probe1.json",
+      "bytes": 5004,
+      "sha256": "f8d3a0f91b90437f00b21cd48dcb25745b640fad01c12ff0435e9be754ccf4bb"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_smoke20.json",
+      "bytes": 60648,
+      "sha256": "f777f528ffb7636d0d54b5d126ed150623cee043c37246fa2dbd6ef573202d9c"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_blend02_probe1.json",
+      "bytes": 12713,
+      "sha256": "02ffbf69a531e2a73b83ffba95248522cd0746c4c5da92dc7110af62a0456826"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_blend1_probe1.json",
+      "bytes": 12646,
+      "sha256": "759d993ffc07d4ae22f3cef7e84f8aa70f1248e4b9c2d0d171350e74b50f51c5"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_delay1_blend05_postswitch1s_probe1.json",
+      "bytes": 14955,
+      "sha256": "aaf3540c0e7dd7e0a74a829663e754a80230279551f428fb850e0e4c5b03d02b"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_delay1_blend05_probe1.json",
+      "bytes": 14847,
+      "sha256": "105558a053627c8fd6e6e98d8308fd17b8456e847b6a505e624566cdfbca5eb6"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_delay1_blend05_smoke24.json",
+      "bytes": 210987,
+      "sha256": "84937f99d9b5e169f08e60274e2603b82bb705875e4f813de9f1f192bd5bb931"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_handoff_diag.json",
+      "bytes": 12430,
+      "sha256": "d7c0ad29d3c53f6d7bedb9c4be9b7629ffd7b118fc831fc13c52a12e221cb635"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_recovery_probe1.json",
+      "bytes": 4368,
+      "sha256": "602d36e5eacbff26db2123f248dce8db8024c8e68e770878a2446705c72f9bd5"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_loco_recovery_probe2.json",
+      "bytes": 10653,
+      "sha256": "883b8d4c5cd7d2cfe803100ef086ff020c44946052da552c6bc82412aea06d66"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_recovery_d2.json",
+      "bytes": 11019,
+      "sha256": "ce330b0df93fc72d4568b85fe2b11b4b01490e05e43cf262461bb9f65e915aac"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_recovery_d3.json",
+      "bytes": 13371,
+      "sha256": "7c6f211ffd63047e8699adaf5a9122d3c923f93e6d504cc5d153b1b98f5a981c"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_recovery_d4.json",
+      "bytes": 13372,
+      "sha256": "02a020184a6b8676e5441da52a7e62cecdc01755949a3bcc428968706a093a96"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_t155_recovery_probe1.json",
+      "bytes": 10635,
+      "sha256": "ce4e6d3f4ac36ec3356b6601996bb16e39a2a3e159f11ccad9d8c8b26018b560"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_v040_straight_t140_nominal_init_damping0_probe1.json",
+      "bytes": 3026,
+      "sha256": "59d03f04c3b4a42fd71774a4ab7a6da3a021a1a3f3908900669bd5622409882e"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_v040_straight_t140_nominal_init_probe1.json",
+      "bytes": 4764,
+      "sha256": "038b0dfb31374088a006b17ac16483fd3b99f16c46718bea310c11fea4c9e63a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_v040_straight_t140_nominal_init_unclipped_probe1.json",
+      "bytes": 4301,
+      "sha256": "ed6701415eb9540890519187dbe0f266570c43eb51966633612b037bbb414d92"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_v040_t140_nominal_init_probe1.json",
+      "bytes": 3996,
+      "sha256": "67ac70f32450ba11fd799d838475b03ec52b8265439159cbc31caa5d3d7418e6"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_stage1_mujoco_v040_t155_loco_probe1.json",
+      "bytes": 8252,
+      "sha256": "61df15e19a90fce30683075001b812df9fac45d14df44c91d3a6e9a668904489"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_vs_064043_x100_stage1_smoke48.json",
+      "bytes": 160680,
+      "sha256": "4cd9901d18ef5a81d81fa1fd2cbe62c940882112c76ca1434c5664435f3e951d"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x150_stage1_smoke48.json",
+      "bytes": 81525,
+      "sha256": "bb865640bcebb20a3683c3346f28c7c33e4f395b4d38010451e9a4b1a4b34982"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x200_stage1_latched_smoke48.json",
+      "bytes": 81550,
+      "sha256": "56a7a53c60b257ca68e6ec6773866a20c0fb7939a4e371b27432fd2498249086"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x200_stage1_nominal_fixed_smoke48.json",
+      "bytes": 81728,
+      "sha256": "48a172ae2119fd1adcb93648afd369bcccfebf89264b4e3ee3a498916a440fb8"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x200_stage1_nominal_stage192.json",
+      "bytes": 251112,
+      "sha256": "13827253ba322f964f338016ed4adc9db4bc9a6f78c8e29d11b81e53a0e617ed"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x200_stage1_smoke48.json",
+      "bytes": 81543,
+      "sha256": "9b041a94430e319ae63a0bf2889231f574f1862f09f036c4be9b64c2b2eec340"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x200_stage1_trace48.json",
+      "bytes": 81535,
+      "sha256": "f8c411a575913b893ba65d6d4fcd29063f34f6a9a33b4e5c364ac723a1ee4537"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x200_stage1_trace48.npz",
+      "bytes": 567465,
+      "sha256": "09548992e9fa9c7de0828dabaf86cf12464e08f59d269c5f216addd71ff48347"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064242_x200_stage1_trainmatched_smoke48.json",
+      "bytes": 81666,
+      "sha256": "f920e7422a2694a05dc81297d006d512a9f2990d58d32e6ead68893e21ded417"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_isaac_passive_damping_025_05_05_nominal24_seed20261127.json",
+      "bytes": 66375,
+      "sha256": "cd60960be5fbec9ac867e82c40f8d7c697ec5fa82845a51a93f0c995852aec55"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_isaac_passive_damping_05_1_1_nominal24_duration25_seed20261127.json",
+      "bytes": 66353,
+      "sha256": "630c334e438eee132a1fa4b82b3ce300ed966a003fe0bc9de7e53298f119045a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_isaac_passive_damping_05_1_1_nominal24_seed20261127.json",
+      "bytes": 66175,
+      "sha256": "05b2fab80cc28d82f8eb86c1211f1dbd7d2d1c049db3ec18ed6a033679df8db1"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_isaac_passive_damping_0_0_0_nominal24_duration25_seed20261127.json",
+      "bytes": 66381,
+      "sha256": "4128eb3b472476cb72285f68333ca8a6bfd5272148a7df79a8957d71a1f78c23"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_isaac_passive_damping_0_0_0_nominal24_seed20261127.json",
+      "bytes": 66360,
+      "sha256": "1a1298558c209a74e70304b0fc36bfaf71aac402c0e1e667a991992d6d0d7f8d"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_isaac_passive_damping_1_2_2_nominal24_duration25_seed20261127.json",
+      "bytes": 66201,
+      "sha256": "69f6e0cbeb08aa304ac367504e3fc514db1cfed3ce0a8df10fd6f06c16825128"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_isaac_passive_damping_1_2_2_nominal24_seed20261127.json",
+      "bytes": 66098,
+      "sha256": "ae65c48883e0c3680179ac31b19cb40ca41f59e72478a092646c0e784e837323"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_damping2_unclipped_regression120_seed2028.json",
+      "bytes": 1081409,
+      "sha256": "295ccfad411ea6b39bdc76e4bc34abf6c71cdccca2cab902201440ecc7a55462"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_damping2_unclipped_smoke24_seed2027.json",
+      "bytes": 232716,
+      "sha256": "a68332222c57be030edc4ac258474fbe150e925b5294a33cee311048102370da"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_damping3_unclipped_regression120_seed2028.json",
+      "bytes": 1545506,
+      "sha256": "b0d20cade1b9a9679b3537d6d5ea524f1fbfb3176be3a78e60a598f1a0d01a55"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_damping3_unclipped_smoke24_seed2027.json",
+      "bytes": 311410,
+      "sha256": "3c7933d2b8e2edd1b013a25efad6933fedba5a1209378c81b6424c494be2aff3"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_damping4_smoke24_seed2027.json",
+      "bytes": 321166,
+      "sha256": "2a37ff44b8afa22dc67c33185cde65cea840c168e6860da2087aaa499b4bc72e"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_damping4_unclipped_regression120_seed2028.json",
+      "bytes": 1359000,
+      "sha256": "bfa85e3c1f64925ced850a4782a4fd0ee80f903f6138a9171bcd28a09bf05bf0"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_damping4_unclipped_smoke24_seed2027.json",
+      "bytes": 258338,
+      "sha256": "4c036c08d7eba7a81aa4a2ffbb5ddcf2801c03efb52e9f97bc35de046c93eac9"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_default_unclipped_smoke24_seed2027.json",
+      "bytes": 113710,
+      "sha256": "ec21948b862fac54c7aaf36c23de4928422a62818d2719935944be1e6e857ae4"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_corrected_smoke24_seed2027.json",
+      "bytes": 108136,
+      "sha256": "75a7b2a62e908b44dd7da3ffc60e7f7ef35cf1473aef36d13b5aa9b86d96d82a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064341_stage1_mujoco_default_unclipped_thigh155_smoke24_seed2027.json",
+      "bytes": 124835,
+      "sha256": "8570c0ef1d0b08d3d4ff978fc87ca134a595174d605d18dbd6ac658473c4bd67"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064400_stage1_mujoco_corrected_damping3_unclipped_regression120_seed2028.json",
+      "bytes": 1509264,
+      "sha256": "396ac9ef96f388476462639582becf48d585800702b1f69ca8505095e3babd8e"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064400_stage1_mujoco_corrected_damping3_unclipped_smoke24_seed2027.json",
+      "bytes": 306001,
+      "sha256": "ef83e5f4149b56920280b1236d96731f0fb53b8eeb4c81e164cf657ed0301bb9"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064400_stage1_mujoco_corrected_damping4_unclipped_regression120_seed2028.json",
+      "bytes": 1340523,
+      "sha256": "0f2f2e2a214eb592ddbcb671ed4d53b2de771c0ea13f55b83a526dcededfbcd0"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064400_stage1_mujoco_corrected_damping4_unclipped_smoke24_seed2027.json",
+      "bytes": 268323,
+      "sha256": "40ac8d18284719323146df35e7b4dcfa00f971cd8991432fa67a4a8b4eb052e7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064441_vs_064242_x200_stage1_smoke48.json",
+      "bytes": 160734,
+      "sha256": "6ec4fe8e8f41d208982547cf802efe71286230b9814a860d22908da407350176"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064500_stage1_mujoco_corrected_damping4_unclipped_smoke24_seed2027.json",
+      "bytes": 231473,
+      "sha256": "9a21885d6bf9347f3e8aecf1068f754e003738cb49f1c61f6d4c23dfc5904516"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064540_stage1_mujoco_corrected_damping4_unclipped_smoke24_seed2027.json",
+      "bytes": 118676,
+      "sha256": "5cc01ab9b5d1d085ba56b902bc23c29f6f4d9388ba0782fbed84a39079931165"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_064540_stage1_mujoco_corrected_default_unclipped_smoke24_seed2027.json",
+      "bytes": 97352,
+      "sha256": "d3729f100c985e2191bb6ae5f1e06a7dc7324014d7e9a89fe4516e276402e023"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_pursuit_smoke20.json",
+      "bytes": 235369,
+      "sha256": "40fd6f87d95d4d940fb5066e04767273847bda6a5b70e23ac5efad801a5922bd"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_scripted_crouch_clip45_s000_stage036_smoke24.json",
+      "bytes": 65427,
+      "sha256": "e6f252955a708c34eec203d9b04658cc637101ac38071585b928b6109e14f113"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_scripted_crouch_clip45_s050_stage036_smoke24.json",
+      "bytes": 65420,
+      "sha256": "ba6a3970f21fce8381b343e12f789a2c3e26f6a0212b354eb3fe7970e733582a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_scripted_crouch_clip45_s075_stage036_smoke24.json",
+      "bytes": 65411,
+      "sha256": "9eb96930043f0cc40a9a90b86a0bcbb71aa1c268ca43f31b638abd09f76e3d85"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_scripted_crouch_s025_stage036_smoke24.json",
+      "bytes": 65378,
+      "sha256": "989db62aeec5000f0d979b8278ff4f3d0f55efa39d2df0dd8fb092139dfca935"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_scripted_crouch_s050_stage036_smoke24.json",
+      "bytes": 65379,
+      "sha256": "71da1975884b00e16aa74c1f676f5dcee903baae480df1a222e0d1d7942fb18a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_scripted_crouch_s075_stage036_smoke24.json",
+      "bytes": 65326,
+      "sha256": "db2f1ad8ca21eabf68ddaa073f1ee660451bfe490fd2a312ab80ecd7628ab8a7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_scripted_crouch_s100_stage036_smoke24.json",
+      "bytes": 65336,
+      "sha256": "d3127593f225b11456ac5be96b845b43f015d28ee89acfc9d4df616087f02aa5"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_smoke20_063296.json",
+      "bytes": 192294,
+      "sha256": "e17177921ddd4558fef8ccbfef81f4f845ee9ad19ba1ad168d6ec9c71af8c047"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_ablation_base-velocity_48_seed20261127.json",
+      "bytes": 161017,
+      "sha256": "ea2423eae5bc6cd8ab1b698ecb860eb5caadaf8e028daed9ebb02e7cb11fd4b7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_ablation_height-noise_48_seed20261127.json",
+      "bytes": 161032,
+      "sha256": "001726462714c19f1af87fd593f5306ea754a881ca814092c18a03332a0fd844"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_ablation_joint-init_48_seed20261127.json",
+      "bytes": 160868,
+      "sha256": "cf436532a98836ca2750790b6eb35282ffae421bec3c02111a45ca5f10b90065"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_ablation_joint-init_height-noise_48_seed20261127.json",
+      "bytes": 160954,
+      "sha256": "3c50ffb896ee01e9a336cfdacb7ef216d9650798a9d13e23fc1d46578c13c305"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_ablation_observation-noise_48_seed20261127.json",
+      "bytes": 161055,
+      "sha256": "52c41d2cd82ec2e88c2c525dd9ce2ab7d6678a799ad0efa3ba86826c8b5aebca"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_aligned_reset_closedloop_seed2027.json",
+      "bytes": 189390,
+      "sha256": "295bbb4bc9f28e3a5eacd28ec4f12adb0acfa97a30d9da222ab23e1df2601994"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_aligned_reset_history_closedloop_seed2027.json",
+      "bytes": 187942,
+      "sha256": "b334421b901bc5703664c09338d9503926a24f60950ed3989bbf79baa3b9876a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_crouch_center_063296_smoke24.json",
+      "bytes": 65370,
+      "sha256": "d55f8c03efa2278267bc7816a02172cdfd1765348560a040504733bd11481bbe"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_crouch_center_t120_smoke24.json",
+      "bytes": 65472,
+      "sha256": "dabbd772841fd8fef3e351f83f319a6f2353365691046b21b2ebe58401b48c64"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_crouch_center_t140_smoke24.json",
+      "bytes": 65490,
+      "sha256": "ad057c635754c23fd1e48fc83558941d0b1fd7c7439f22b3b9ed48b99f75b208"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_damping_replay_audit.json",
+      "bytes": 2191,
+      "sha256": "721980f9bc4991140faf3fdcf074d87dc3c36872c0120daae02b9a87f96c7757"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_dynamics_replay_audit.json",
+      "bytes": 4137,
+      "sha256": "b398e593026a125090b07eb65739d4ec6f1a5b715ea7162fd02a108a3af84a36"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_fixed_scripted_s075_smoke24.json",
+      "bytes": 65655,
+      "sha256": "044fe8df549cb28f168aeb8b4a3e9a7c268213fa4bb48a96fc5dd2bf7f488d60"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_fixed_scripted_s075_trace4.json",
+      "bytes": 30213,
+      "sha256": "7a7f914a73e8075fbe2b11c7fd54f785d79af4847c9214d1c0373fba3272db03"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_fixed_scripted_s075_trace4.npz",
+      "bytes": 24343,
+      "sha256": "4bff44e0157dec2826119a8ed03c79f730e999a68a400967e84e1edb3d2e37b6"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_friction_replay_audit.json",
+      "bytes": 5478,
+      "sha256": "0b63da08fede899d81d8caac83a2377288e8642917cb1d225c37f4f62ced382a"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_hard_ft2_nominal_screen48_seed20261127.json",
+      "bytes": 161010,
+      "sha256": "e074ff7aacc70352c6ecf162f0d424b3cb819e2604cdc026d2fe3a50d07b86f0"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_hard_ft2_trainmatched_4x48_seeds20261127_30.json",
+      "bytes": 996245,
+      "sha256": "f69a1ed567885b425eb5d3450e12709c4c002274295f58f41c46affa4e55d1ea"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_hard_ft2_trainmatched_screen48_seed20261129.json",
+      "bytes": 477529,
+      "sha256": "436dfb9ebecb36ab40e84d3876fbcfded1a51587a9124fafea92591dbdfa11c2"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_hard_ft_screen48_seed20261127.json",
+      "bytes": 398742,
+      "sha256": "837644254a456823f015b761dd3facfd02511cc523cb842d632ee644c3254548"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_hard_ft_trainmatched_2x48_seeds20261127_28.json",
+      "bytes": 544809,
+      "sha256": "8afca1d5884b26f80e49731079e0e982c745742167dea0c47f47173634377ade"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_hard_ft_trainmatched_2x48_seeds20261129_30.json",
+      "bytes": 273621,
+      "sha256": "3a1813fcb366ee1ac9325da9cc1897eea646d3d66aa77dab762d304b0419ad77"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_isaac_reset_contact_trace_064242_x200.json",
+      "bytes": 20172,
+      "sha256": "20981e17e7278d35bd88f8ab18906e065dd36ebeaeb00be4832642d437f3e21d"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_isaac_reset_contact_trace_064242_x200.npz",
+      "bytes": 31723,
+      "sha256": "31048db835ba30c021388d8f19b694e18c5f14bc0fa30aa9f1fe7cc40f1d655e"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_scripted_clip45_s060_smoke24.json",
+      "bytes": 65661,
+      "sha256": "251fcb647dc266b86724c65992f6ccea51c5f12aa1a415cdaa0cfa351decae06"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_scripted_clip45_s075_smoke24.json",
+      "bytes": 65661,
+      "sha256": "99fe689b1460e64d244bcdce462b5ef76ca5346ca2e36d7ecd77c660fbb3eed4"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_scripted_clip45_s090_smoke24.json",
+      "bytes": 65683,
+      "sha256": "e0c643553ccd1046407ae52f8e7bbb0108ea413f87624acc287d5156740b0bc7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_scripted_s075_trace4.json",
+      "bytes": 30238,
+      "sha256": "e7e212e7a2f37b42a3c8dfb252236165f35c2c3c0866511b156de171f268d569"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_scripted_s075_trace4.npz",
+      "bytes": 23592,
+      "sha256": "b1fbe423391bd0a9cb276abfc08856d016f6015e45d429bd4bf41c02feae59b7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_solref_closedloop_064341_seed2027.json",
+      "bytes": 311115,
+      "sha256": "3c7c139fd6745d8df4c8e71269cf6477edb11bd2af74f86c8575edeb9b00f740"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_solref_openloop_audit.json",
+      "bytes": 4786,
+      "sha256": "efdff9bd28ba41d60ed0a533912764d5bb01c41364b1017ddf8b9e9160ed225f"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_teacher_hfb_s050_smoke24.json",
+      "bytes": 65698,
+      "sha256": "c2bd0e1ef4d9ab3f362f0f212364adf17838a45e793e9660d84def5b0ed660a7"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_teacher_hfb_s060_smoke24.json",
+      "bytes": 65692,
+      "sha256": "00424c55f28df2210365c84e83e9e9d8851ce7670b6f8d57f50dea69efd5c5e8"
+    },
+    {
+      "path": "evaluations/robocon_2027/low_frame_stage1_teacher_hfb_s070_smoke24.json",
+      "bytes": 65678,
+      "sha256": "b1e0e9c2c5fc2099d7838d7255471a0bc023377edc31e9c4781ae363d827cf77"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_planner_v2_smoke3.json",
+      "bytes": 59360,
+      "sha256": "6856bd6f2ea71e0f8fca0d507beb0dd6d72a7e9a1ac383c57bb5013685de4adb"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_planner_v3_smoke3.json",
+      "bytes": 69653,
+      "sha256": "e3964329e7e28540ce7efb7939609799d83d41d8467976fb7a61914c6e961806"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_smoke3.json",
+      "bytes": 64930,
+      "sha256": "3e9c1f8d9754e4485a277d49ae846eef6c7f16635799fc9cb8e0c0faeae1b880"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_v2_smoke3.json",
+      "bytes": 72869,
+      "sha256": "bde8ff4212b2b32d72df2b16ac54fa9d07f5d512488f8477e35015c1ddfec181"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_v3_smoke3.json",
+      "bytes": 63473,
+      "sha256": "aba41b364cac9407f90c6f6d04ded1b616d3725cdce334fad74a7fd1c3fbffeb"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_v4_smoke3.json",
+      "bytes": 58800,
+      "sha256": "aad48093da3e9b957eed106a7a26803c27f6e6ba5f4da266e954a31e76a9bfb2"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_v5_smoke3.json",
+      "bytes": 65654,
+      "sha256": "ab1968b03c1ca5521ca12713dd030db91103555d35af97767674751fd00e7458"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_v6_smoke5.json",
+      "bytes": 81200,
+      "sha256": "38ba540fb3c2ff7a13ed570b49c2276c9c68ce925cafa6382682612a053370dc"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_v7_smoke20.json",
+      "bytes": 350067,
+      "sha256": "191463688f521c35916d23ff1b080a521b6f02150d2b02b91a2e7a6f73506712"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_pursuit_v7_smoke5.json",
+      "bytes": 88383,
+      "sha256": "cc7dd1bf467c3e6551e3379c595b1004101876ffcd82a2fe203f728af7f4c36b"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_smoke20_6pole_059950.json",
+      "bytes": 287736,
+      "sha256": "2489de792a470fb9596e85e8bb6b08999c57b0649df148f1fd0c35c46dc0921a"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_smoke_6pole_v1.json",
+      "bytes": 15032,
+      "sha256": "612528a3bd6a5b1b6a6f512ff37a273d723e4c0a76a2044a4b42b72565e7ca2b"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_smoke_v4.json",
+      "bytes": 13659,
+      "sha256": "512b6a25535267e9b056c16df25e4762aab4e8f1d8d5e3120e93a83b9baf398c"
+    },
+    {
+      "path": "evaluations/robocon_2027/slalom_smoke_v5.json",
+      "bytes": 18812,
+      "sha256": "044255235f75cf8584ef5a1ece6ed6e167a4af06934a28a7e3aa3f7a6c49100f"
+    },
+    {
+      "path": "evaluations/robocon_2027/stairs_mujoco_robust20_059950.json",
+      "bytes": 63906,
+      "sha256": "eb193e3dd58c5473d4eccf91ecff45f0afb51e3473c3e3c0ea5c1a2d27fa9182"
+    },
+    {
+      "path": "evaluations/robocon_2027/stairs_mujoco_smoke_059950.json",
+      "bytes": 9264,
+      "sha256": "12a2894c50376226ce7f279cedcc147933839c765bb6672c3eaf6fe976f82337"
+    },
+    {
+      "path": "evaluations/robocon_2027/zero_training_smoke.json",
+      "bytes": 15457,
+      "sha256": "c30d932d5b202097b606fc491d38ca6c9fa5673d3cb5bc3cfee46fe52696c254"
+    },
+    {
+      "path": "evaluations/robocon_2027/zero_training_smoke_v2.json",
+      "bytes": 31736,
+      "sha256": "e66edd8b2b37715f062d61792fe3f46ff1492f0fb537bd188d9d8e503f3f2b50"
+    },
+    {
+      "path": "evaluations/robocon_2027/zero_training_smoke_v3.json",
+      "bytes": 31749,
+      "sha256": "1d5e2b5e19cd916bda9e33cf8ce36ad3d9f56c40583f2e107f53362c7184931d"
+    }
+  ]
+}

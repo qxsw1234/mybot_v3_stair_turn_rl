@@ -7,6 +7,10 @@ setup(
     author='Davide Plozza, Gabriel Margolis',
     license="BSD-3-Clause",
     packages=find_packages(),
+    include_package_data=True,
+    package_data={
+        'robodog_gym.envs.robocon_2027': ['config/*.yaml'],
+    },
     author_email='dplozza@ethz.ch, gmargo@mit.edu',
     description='Toolkit for deployment of sim-to-real RL controller on Unitree robots.',
     install_requires=['ml_logger==0.8.117',

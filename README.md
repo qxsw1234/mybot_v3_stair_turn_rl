@@ -4,13 +4,16 @@
 ROBOCON 仿生足式机器人挑战赛。控制器在 **Isaac Gym** 中训练，在 **MuJoCo**
 中做 sim2sim 验证，并通过 ROS2 / C++ 节点部署到实机。
 
-当前覆盖的运动能力：
+当前已具备平地、转向、站立和部分台阶运动基础。2027 障碍赛已有绕桩、单木桥和限高框架的仿真基线，**当前处于 M2 限高 Stage 1，尚未完成跨引擎与实机验收，Stage 2 关闭**。
 
-- 平地行走、前后/横向移动、原地与行进转向；
-- 上行与下行台阶（训练 ~8–20 cm，鲁棒验收落到 10/12 cm）；
-- 静止站立与零指令保持；
-- RoboCon 障碍技能：限高杆（Low Bar）、木桥 A/B、高墙、T 字台阶、大斜坡、
-  直角绕杆、砂砾碎木坑（障碍技能按里程碑逐个训练，进度见下文）。
+优先阅读：
+
+- [2027 当前执行状态](docs/2027_ROBOCON_EXECUTION_STATUS.md)
+- [下一步详细计划与完成判据](docs/2027_ROBOCON_NEXT_STEPS_20261015.md)
+- [开源案例调研与采用建议](docs/2027_ROBOCON_OPEN_SOURCE_REFERENCES.md)
+- [checkpoint 与评测证据校验清单](docs/2027_ROBOCON_ARTIFACT_MANIFEST.json)
+
+本次GitHub更新仅包含代码、文档、结果摘要与校验清单。201份原始评测JSON/NPZ和checkpoint/JIT本体留在desktop，不随clone下载。
 
 ---
 
@@ -76,7 +79,7 @@ mybot_v3_stair_turn_rl/
 └── logs/                        # 训练与评测日志（不纳入版本控制）
 ```
 
-`runs/`、`logs/`、`*.jit`、`*.pdf`、`robocon_reference/` 等都在 `.gitignore`
+`runs/`、`logs/`、`*.jit`、`*.pdf`、`robocon_reference/`及2027原始评测JSON/NPZ等都在 `.gitignore`
 中：**clone 本仓库不会得到 checkpoint，需要在本机训练或另行拷贝。**
 
 ---
@@ -110,7 +113,7 @@ pip install -e .
 
 ## 5. 快速开始：MuJoCo 交互仿真
 
-项目提供一键启动脚本 `run_mujoco.sh`，加载**完整 RoboCon 场地**，默认进入
+项目提供一键启动脚本 `run_mujoco.sh`，加载**历史 RoboCon 场地**（不能用于2027规则验收），默认进入
 键盘遥控模式：
 
 ```bash
@@ -210,7 +213,7 @@ nvidia-smi
 
 ## 7. 评测与验收
 
-### 7.1 限高杆门禁评测（正式协议）
+### 7.1 历史单横杆评测协议（2027 框架请使用下一步计划附录）
 
 `scripts/run_low_bar_gate.sh` 在**同一次调用**里重测基线并评测所有候选，保证
 逐 episode 配对可比：
@@ -264,35 +267,35 @@ python -u scripts/view_low_bar.py --clearance 0.30
 
 ---
 
-## 8. 当前进度（截至 2026-10-10）
+## 8. 当前进度（2026-10-15 核查）
 
-以仓库中实际跑出的评测为准，不使用未复现的峰值数字。
+采用 2027 计划的 M0–M5 编号；旧版木桥 A/B、T 字台阶等方案是历史资料。
 
-| 能力 | 状态 |
-|---|---|
-| 平地行走 / 横移 / 转向 / 静止站立 | 可用，`059950` 为通用运动基线 |
-| 上下台阶 | 可用；MuJoCo 12 cm 鲁棒压力测试通过 |
-| T 字台阶、大斜坡 | 验收 harness 已就绪（`eval_mujoco_obstacles.py`） |
-| 限高杆 Low Bar | 训练与评测链路已打通，尚未达到 M1 门槛 |
-| 木桥 A / 木桥 B | 未开始正式训练 |
-| 高墙 | 未开始正式训练 |
-| 多障碍统一策略 | 未开始（计划用 teacher–student / DAgger 蒸馏） |
+| 能力 | 最近已核实结果 | 判断 |
+|---|---|---|
+| 通用运动 `059950` | 平地、转向、站立与台阶基线 | 保留，不覆盖 |
+| 绕桩 | MuJoCo 19/20，平均72.63 s，P95 73.39 s | 小样本候选；需复核判据、提速和扩大验收 |
+| 单木桥 400×3000×100 mm | MuJoCo 14/20，6次桥外落足失败 | 需专项微调 |
+| 台阶 8/10/12 cm | MuJoCo 18/20、20/20、16/20 | 需新版规则及Isaac配对评测 |
+| 限高 Stage 1，.36×1.10×.40 m | `064242` Isaac nominal 192/192；`064341` MuJoCo原设阻尼2/24 | 未通过跨引擎门槛 |
+| 限高诊断 | `064341` 在3×被动阻尼下120/120 | 未经实机标定，不能算正式通过 |
+| 高墙/完整跨沟/砖木坑/轮胎阵/梅花桩 | 无完成验收证据 | 后续专项 |
 
-机器人合规（`M0_REPORT_20261005.md`）：质量 14.30 kg（≤35）、站立外廓
-659×437×406 mm（≤800×600×600）、足端接地外接圆 56.5 mm（≤80）、蹲姿全身最高
-点 162.7 mm（限高杆净空 300 mm，余量充足）。
+已完成两轮限高续训和动力学对照。保留`064242`原候选，`064341`研究候选、`064400`备选；`064540`跨引擎退化，排除。完整run路径与SHA-256见清单，不能只靠数字编号或`latest`选择模型。
 
-限高杆 Low Bar 明细：
+10月15日未发现训练/评测进程；环境导入、CUDA及13项规则测试正常。遥测发布代码已准备，C++完整构建仍受Torch/ROS依赖链接问题阻塞。`hardware_capability.yaml`实测字段未补齐。
 
-- Actor 观测已从 3 维扩展为 7 维，旧字段顺序保留，可安全扩维加载旧
-  checkpoint：`forward`、`lateral`、`bar_bottom_above_base`、
-  `sin(heading_error)`、`cos(heading_error)`、`ground_clearance`、`valid`；
-- 横向 ±0.05 m、航向 ±0.05 rad 的 `train-matched` 条件下，用正式协议
-  （1000 episodes）测得 `060898` ≈ 73.1%、`060920` ≈ 73.1%、`060922` ≈ 73.4%，
-  三者配对差值区间均包含 0，即**当前无可分辨的提升**；
-- 主要失败模式是门框外穿越（约 21%）；碰杆约 5.8%，真实跌倒约 0%；
-- 因此 M1 判定为**未完成**：在连续两个 checkpoint 用正式协议达到 90% 前，
-  不启动木桥 A 的正式训练。
+### 复查 desktop 本地证据
+
+以下校验需要desktop上的原始评测文件；仅clone公开仓库会报告缺少数据。
+
+```bash
+python scripts/audit_robocon_2027_artifacts.py --verify
+# 仅在已保存对应 runs/ 的 desktop 或备份机执行：
+python scripts/audit_robocon_2027_artifacts.py --verify --include-checkpoints
+```
+
+历史JSON使用不同判据与物理参数，不能直接混合比较；详见[执行状态](docs/2027_ROBOCON_EXECUTION_STATUS.md)与[证据说明](evaluations/robocon_2027/README.md)。
 
 ---
 
@@ -302,10 +305,11 @@ python -u scripts/view_low_bar.py --clearance 0.30
   checkpoint 已写完之后，属于既存析构问题；门禁脚本已改为显式退出，避免把
   成功写成失败。
 - **checkpoint 与 JIT 不在版本库中**：`runs/`、`logs/`、`*.jit` 均被忽略，
-  换机器或重新 clone 后需要重新训练或手动拷贝。
-- **MuJoCo bridge 当前按 119/116 单帧观测契约运行**（无 `obstacle_ahead`）。
-  限高杆的 7 维障碍观测版本尚未接入 MuJoCo sim2sim；完整 RoboCon 地图仿真
-  目前使用台阶专项 checkpoint。
+  换机器或重新 clone 后需要从已保存的 run/备份拷贝并校验，无须因此从头训练。
+- **Python MuJoCo bridge 已支持119/116及126/123单帧契约**，由JIT输入推断。
+  7维限高观测已接入专项评测；这不代表C++部署观测和实机验收完成。
+- **C++部署构建阻塞**：现有Torch/ROS/SDK ABI及依赖组合链接失败；
+  不应把遥测代码已编译的对象文件当作可运行节点。
 - **脚本中存在本机绝对路径**（`/home/ldl/anaconda3/...`、
   `/home/ldl/mybot_v3_stair_turn_rl`）。迁移到其他机器时需要相应修改。
 - **训练指标已修正**：episode 统计按实际完成数量加权，且每个 physics step
@@ -338,7 +342,11 @@ target_dof_pos = policy_dof_pos + action * 0.25
 
 | 文档 | 内容 |
 |---|---|
-| `docs/ROBOCON_OBSTACLE_TRAINING_PLAN.md` | 主训练计划：里程碑、课程、评测协议与判定规则 |
+| [2027 下一步计划](docs/2027_ROBOCON_NEXT_STEPS_20261015.md) | 当前工作包、方法、样本数与完成判据 |
+| [2027 执行状态](docs/2027_ROBOCON_EXECUTION_STATUS.md) | 原始结果、候选选择和阻塞项 |
+| [2027 总计划](docs/2027_ROBOCON_OBSTACLE_TRAINING_PLAN.md) | 180秒、八障碍、M0–M5 |
+| [开源案例调研](docs/2027_ROBOCON_OPEN_SOURCE_REFERENCES.md) | PACE、Robot Parkour、ABS、Extreme Parkour、HIMLoco |
+| `docs/ROBOCON_OBSTACLE_TRAINING_PLAN.md` | 历史Low Bar→Bridge A/B续训方案；不是2027进度入口 |
 | `M0_REPORT_20261005.md` | 赛题尺寸核对、机器人合规、蹲姿可达性 |
 | `PHASE3_SIM2SIM.md` | 台阶 sim2sim 动力学差距分析与第三阶段训练 |
 | `PLAN_ROBOCON_OBSTACLE_20261005.md` | RoboCon 障碍训练总体规划（历史版本） |

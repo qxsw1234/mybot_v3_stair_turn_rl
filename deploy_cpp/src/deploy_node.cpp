@@ -293,7 +293,8 @@ public:
       }
 
       if (visualizer_) {
-        visualizer_->publish_joint_states(get_dof_pos(), get_dof_vel());
+        visualizer_->publish_joint_states(
+            get_dof_pos(), get_dof_vel(), motor_ ? &motor_->dof_tau() : nullptr);
       }
 
       ++loop_count;
@@ -712,6 +713,9 @@ private:
       mujoco_motor_->send_commands(target, kp, kd);
     } else if (fake_motor_) {
       fake_motor_->send_commands(target, kp, kd);
+    }
+    if (visualizer_) {
+      visualizer_->publish_joint_targets(target);
     }
   }
 

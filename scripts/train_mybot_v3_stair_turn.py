@@ -28,6 +28,11 @@ def train_mybot_v3_stair_turn(
     low_bar_lateral_init_range=0.0,
     low_bar_yaw_init_range=0.0,
     low_bar_spec_only=False,
+    low_bar_stage=None,
+    low_bar_pretrain=False,
+    low_bar_crouch_center=False,
+    low_bar_crawl_vx=0.50,
+    low_bar_x=2.0,
 ):
 
     import isaacgym
@@ -73,6 +78,13 @@ def train_mybot_v3_stair_turn(
         raise ValueError("--policy-anchor-coef must be non-negative")
     if policy_anchor_coef > 0.0 and resume_run is None:
         raise ValueError("--policy-anchor-coef requires --resume-run")
+    if low_bar_pretrain and (robocon_obstacle != "low_bar" or low_bar_stage != 1):
+        raise ValueError(
+            "--low-bar-pretrain currently requires --low-bar-stage 1")
+    if low_bar_crouch_center and robocon_obstacle != "low_bar":
+        raise ValueError("--low-bar-crouch-center requires low_bar mode")
+    if low_bar_crawl_vx <= 0.0:
+        raise ValueError("--low-bar-crawl-vx must be positive")
 
     Cfg.env.num_envs = num_envs
     Cfg.cfg_ppo.seed = seed
@@ -488,18 +500,71 @@ def train_mybot_v3_stair_turn(
         Cfg.terrain.yaw_init_range = low_bar_yaw_init_range
         # Flat ground everywhere: index 6 = "empty" leaves the height field at 0.
         Cfg.terrain.terrain_proportions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-        Cfg.terrain.low_bar_clearance_min = 0.25       # hardest row (lowest bar)
-        Cfg.terrain.low_bar_clearance_max = 0.35       # easiest row (highest bar)
-        Cfg.terrain.low_bar_target_clearance = 0.30    # ROBOCON competition spec
+        Cfg.terrain.low_bar_clearance_min = 0.29       # competition inner height
+        Cfg.terrain.low_bar_clearance_max = 0.36       # first curriculum height
+        Cfg.terrain.low_bar_target_clearance = 0.29    # ROBOCON competition spec
         if low_bar_spec_only:
             # M1.3: train the competition clearance and below without changing
             # the pose distribution at the same time, so a bar-contact fix is
             # not confounded with an alignment fix.
             Cfg.terrain.low_bar_clearance_max = Cfg.terrain.low_bar_target_clearance
-        Cfg.terrain.low_bar_width = 1.0
+        Cfg.terrain.low_bar_width = 0.80
+        Cfg.terrain.low_bar_length = 0.80
         Cfg.terrain.low_bar_thickness = 0.05
-        Cfg.terrain.low_bar_x = 2.0                    # bar ~2 m ahead of spawn
+        Cfg.terrain.low_bar_x = low_bar_x              # curriculum entrance offset
+        Cfg.terrain.low_bar_asset_path = (
+            '{MINI_GYM_ROOT_DIR}/resources/objects/low_bar/'
+            'low_frame_2027.urdf')
+        # Isaac Gym cannot anisotropically scale a URDF per actor.  Use one
+        # exact asset per planned geometry stage and promote checkpoint to
+        # checkpoint only after the previous stage passes held-out evaluation.
+        low_bar_stage_specs = {
+            1: (0.36, 1.10, 0.40, 'low_frame_stage1_h360_w1100_l400.urdf'),
+            2: (0.32, 0.90, 0.80, 'low_frame_stage2_h320_w900_l800.urdf'),
+            3: (0.29, 0.80, 0.80, 'low_frame_2027.urdf'),
+            4: (0.2755, 0.76, 0.84, 'low_frame_stage4_h2755_w760_l840.urdf'),
+        }
+        if low_bar_stage is not None:
+            height, width, length, asset_name = low_bar_stage_specs[low_bar_stage]
+            Cfg.terrain.low_bar_clearance_min = height
+            Cfg.terrain.low_bar_clearance_max = height
+            Cfg.terrain.low_bar_target_clearance = height
+            Cfg.terrain.low_bar_width = width
+            Cfg.terrain.low_bar_length = length
+            Cfg.terrain.low_bar_asset_path = (
+                '{MINI_GYM_ROOT_DIR}/resources/objects/low_bar/' + asset_name)
+        if low_bar_pretrain:
+            # Preserve the conceptual envelope and every dense phase reward,
+            # but remove hard roof contact and early envelope termination.
+            # A clean conceptual pass can still trigger the real success event.
+            Cfg.terrain.low_bar_pretrain = True
+            Cfg.terrain.low_bar_asset_path = (
+                '{MINI_GYM_ROOT_DIR}/resources/objects/low_bar/'
+                'low_frame_stage1_training_marker.urdf')
+        if low_bar_crouch_center:
+            # Stage-1 crawl expert: centre residual actions on the most stable
+            # moderate pose from the M0 feasible set.  This avoids spending
+            # most of the action range cancelling the standing configuration.
+            for name in list(Cfg.init_state.default_joint_angles):
+                lname = str(name).lower()
+                if 'hip' in lname:
+                    Cfg.init_state.default_joint_angles[name] = (
+                        0.10 if lname.startswith(('fl', 'rl')) else -0.10)
+                elif 'thigh' in lname:
+                    Cfg.init_state.default_joint_angles[name] = 1.40
+                elif 'calf' in lname:
+                    Cfg.init_state.default_joint_angles[name] = -2.15
+            Cfg.init_state.pos[2] = 0.21
+        # The mesh-verified crouch target needs a thigh residual of about
+        # +3.2.  The old +/-3 clip made it unreachable and left no headroom
+        # for gait modulation.  A read-only smoke test found +/-4.5 preserved
+        # forward locomotion without increasing falls.
+        Cfg.normalization.clip_actions = 4.5
+        # The rule allows light frame contact.  Record contact from 1 N, but
+        # fail only a provisionally excessive impact; the latter must be
+        # calibrated on the physical frame before real-robot acceptance.
         Cfg.terrain.low_bar_contact_force_threshold = 1.0
+        Cfg.terrain.low_bar_excessive_force_threshold = 250.0
         Cfg.terrain.low_bar_pass_margin = 0.05
         Cfg.terrain.low_bar_gate_margin = 0.02
         Cfg.terrain.low_bar_stable_roll_pitch = 0.60
@@ -510,16 +575,30 @@ def train_mybot_v3_stair_turn(
         Cfg.terrain.low_bar_alignment_tolerance = 0.15
         Cfg.terrain.low_bar_heading_tolerance = 0.10
         Cfg.terrain.low_bar_heading_weight = 1.0
-        Cfg.terrain.low_bar_crouch_margin = 0.08
+        # body collision extends about 0.10 m above base; 0.12 m clearance
+        # margin therefore shapes a genuinely passable pose instead of giving
+        # full crouch reward while the roof still intersects the trunk.
+        Cfg.terrain.low_bar_crouch_margin = 0.12
         Cfg.terrain.low_bar_crouch_shaping_span = 0.20
+        # M0 MuJoCo mesh scan: select a feasible symmetric pose instead of the
+        # mechanically extreme 163 mm minimum-height posture.  Stage 1 uses a
+        # milder 1.40-rad thigh target; later stages use the 269 mm posture.
+        Cfg.terrain.low_bar_crouch_target_hip = 0.10
+        Cfg.terrain.low_bar_crouch_target_thigh = (
+            1.40 if low_bar_crouch_center else 1.60)
+        Cfg.terrain.low_bar_crouch_target_calf = -2.15
+        Cfg.terrain.low_bar_crouch_target_sigma = 0.65
         # M1.3 three-phase shaping.  body_top is the term that actually
         # constrains the front leg; the crossing-speed term keeps the policy
         # from trading progress for clearance.
-        Cfg.terrain.low_bar_body_top_window = 0.35
-        # Legs get the strict ceiling (they are the measured colliders); the
-        # trunk is allowed above the edge so it cannot dominate the term.
-        Cfg.terrain.low_bar_body_top_safety = 0.05
-        Cfg.terrain.low_bar_trunk_safety = -0.10
+        # Begin lowering 0.8 m before entry, as required by the action
+        # decomposition in the 2027 plan.  The old 0.35 m window was too late
+        # and encouraged lateral avoidance at the entrance.
+        Cfg.terrain.low_bar_body_top_window = 0.80
+        # The reward now uses the actual collision AABB, so both trunk and legs
+        # must fit below the 0.29 m envelope with a small safety margin.
+        Cfg.terrain.low_bar_body_top_safety = 0.01
+        Cfg.terrain.low_bar_trunk_safety = 0.01
         Cfg.terrain.low_bar_recover_distance = 0.35
         Cfg.terrain.low_bar_recover_span = 0.06
         Cfg.terrain.low_bar_crossing_min_vx = 0.25
@@ -537,8 +616,10 @@ def train_mybot_v3_stair_turn(
         Cfg.domain_rand.randomize_lag_timesteps = False
 
         # Difficulty = terrain row, in the OPPOSITE direction to the stairs:
-        # row 0 = highest bar (0.35 m, easiest) ... last row = lowest (0.25 m).
-        # Force the middle row to the exact competition clearance.
+        # row 0 = highest frame (0.36 m, easiest) ... last row = the 0.29 m
+        # competition height.  Keep this table strictly monotone; an older
+        # implementation injected the target into the middle row and then
+        # became easier again, invalidating promotion semantics.
         lb_min = Cfg.terrain.low_bar_clearance_min
         lb_max = Cfg.terrain.low_bar_clearance_max
         lb_levels = Cfg.terrain.num_rows
@@ -547,8 +628,9 @@ def train_mybot_v3_stair_turn(
                         for i in range(lb_levels)]
         else:
             lb_table = [lb_max]
-        if not low_bar_spec_only:
-            lb_table[lb_levels // 2] = Cfg.terrain.low_bar_target_clearance
+        if any(lb_table[i + 1] > lb_table[i]
+               for i in range(len(lb_table) - 1)):
+            raise RuntimeError('low-bar clearance curriculum must be monotone')
         Cfg.terrain.robocon_low_bar_clearance_by_level = lb_table
 
         # The policy must be able to SEE the overhead bar (the downward height
@@ -568,11 +650,15 @@ def train_mybot_v3_stair_turn(
         # these coefficients are the true one-shot reward/penalty magnitudes.
         Cfg.reward_scales.low_bar_crouch = 1.0
         Cfg.reward_scales.low_bar_body_top = -100.0
+        Cfg.reward_scales.low_bar_inside_progress = 3.0
+        Cfg.reward_scales.low_bar_early_recover = -5.0
         Cfg.reward_scales.low_bar_recover = 1.5
-        Cfg.reward_scales.low_bar_crossing_speed = -4.0
+        # Inside-progress already prevents standing still.  Do not pressure a
+        # new full-frame policy to rush into the roof before it learns crouch.
+        Cfg.reward_scales.low_bar_crossing_speed = 0.0
         Cfg.reward_scales.low_bar_alignment = -1.0
-        Cfg.reward_scales.low_bar_pass = 3.0
-        Cfg.reward_scales.low_bar_success = 7.0
+        Cfg.reward_scales.low_bar_pass = 0.0
+        Cfg.reward_scales.low_bar_success = 20.0
         Cfg.reward_scales.low_bar_collision = -5.0
         Cfg.reward_scales.low_bar_missed_gate = -5.0
 
@@ -831,8 +917,8 @@ def train_mybot_v3_stair_turn(
         Cfg.commands.heading_command = False
         Cfg.commands.command_curriculum = False
         Cfg.commands.resampling_time = Cfg.env.episode_length_s
-        Cfg.commands.lin_vel_x = [0.50, 0.50]
-        Cfg.commands.limit_vel_x = [0.50, 0.50]
+        Cfg.commands.lin_vel_x = [low_bar_crawl_vx, low_bar_crawl_vx]
+        Cfg.commands.limit_vel_x = [low_bar_crawl_vx, low_bar_crawl_vx]
         # Phase 1 validates a centred, straight pass. Lateral/yaw command
         # perturbations are introduced only after nominal success exceeds the
         # milestone; otherwise velocity tracking explicitly asks the policy to
@@ -896,6 +982,29 @@ if __name__ == '__main__':
         action="store_true",
         help=("Restrict the low-bar clearance table to the competition spec and "
               "below (0.25..0.30 m).  Used by the M1.3 bar-contact block."),
+    )
+    parser.add_argument(
+        "--low-bar-stage", type=int, choices=[1, 2, 3, 4], default=None,
+        help=("Use one exact planned low-frame geometry stage: "
+              "1=0.36x1.10x0.40, 2=0.32x0.90x0.80, "
+              "3=0.29x0.80x0.80, 4=0.2755x0.76x0.84 m."),
+    )
+    parser.add_argument(
+        "--low-bar-pretrain", action="store_true",
+        help=("Stage-1 soft-envelope crawl pretraining with a collision-free "
+              "visual frame; requires --low-bar-stage 1."),
+    )
+    parser.add_argument(
+        "--low-bar-crouch-center", action="store_true",
+        help="Centre Stage-1 expert actions on thigh=1.40, calf=-2.15 rad.",
+    )
+    parser.add_argument(
+        "--low-bar-crawl-vx", type=float, default=0.50,
+        help="Fixed forward command used by the low-bar expert [m/s].",
+    )
+    parser.add_argument(
+        "--low-bar-x", type=float, default=2.0,
+        help="Frame entrance x-offset used by phase curriculum [m].",
     )
     parser.add_argument(
         "--allow-observation-expansion",
@@ -1042,9 +1151,17 @@ if __name__ == '__main__':
                   xKey: iterations
                 - yKey: train/episode/rew_low_bar_alignment/mean
                   xKey: iterations
+                - yKey: train/episode/rew_low_bar_inside_progress/mean
+                  xKey: iterations
+                - yKey: train/episode/rew_low_bar_early_recover/mean
+                  xKey: iterations
                 - yKey: train/episode/low_bar_pass_rate/mean
                   xKey: iterations
+                - yKey: train/episode/low_bar_contact_rate/mean
+                  xKey: iterations
                 - yKey: train/episode/low_bar_collision_rate/mean
+                  xKey: iterations
+                - yKey: train/episode/low_bar_envelope_violation_rate/mean
                   xKey: iterations
                 - yKey: train/episode/low_bar_missed_gate_rate/mean
                   xKey: iterations
@@ -1074,4 +1191,9 @@ if __name__ == '__main__':
         low_bar_lateral_init_range=args.low_bar_lateral_init_range,
         low_bar_yaw_init_range=args.low_bar_yaw_init_range,
         low_bar_spec_only=args.low_bar_spec_only,
+        low_bar_stage=args.low_bar_stage,
+        low_bar_pretrain=args.low_bar_pretrain,
+        low_bar_crouch_center=args.low_bar_crouch_center,
+        low_bar_crawl_vx=args.low_bar_crawl_vx,
+        low_bar_x=args.low_bar_x,
     )

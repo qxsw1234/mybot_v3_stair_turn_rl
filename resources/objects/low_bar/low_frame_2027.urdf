@@ -1,0 +1,67 @@
+<?xml version="1.0"?>
+<!--
+  2027 ROBOCON low-frame collision asset.
+
+  The actor origin is the centre of the entrance top edge.  The environment
+  places it at z = inner_height + 0.5 * member_thickness.  Dimensions:
+    inner height 0.29 m (set by actor pose)
+    inner width  0.80 m
+    tunnel length 0.80 m
+    member thickness 0.05 m
+
+  A continuous top collision slab is deliberately conservative and matches
+  the MuJoCo baseline scene: any part of the robot above the 0.29 m envelope
+  anywhere along the 0.8 m tunnel is rejected.  Four corner posts preserve
+  the complete-frame lateral constraint.
+-->
+<robot name="robocon_2027_low_frame">
+  <link name="low_frame">
+    <collision name="roof">
+      <origin xyz="0.40 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.80 0.90 0.05"/></geometry>
+    </collision>
+    <visual name="roof_vis">
+      <origin xyz="0.40 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.80 0.90 0.05"/></geometry>
+      <material name="frame_red"><color rgba="0.80 0.10 0.10 1.0"/></material>
+    </visual>
+
+    <collision name="entry_post_pos_y">
+      <origin xyz="0 0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+    </collision>
+    <collision name="entry_post_neg_y">
+      <origin xyz="0 -0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+    </collision>
+    <collision name="exit_post_pos_y">
+      <origin xyz="0.80 0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+    </collision>
+    <collision name="exit_post_neg_y">
+      <origin xyz="0.80 -0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+    </collision>
+
+    <visual name="entry_post_pos_y_vis">
+      <origin xyz="0 0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+      <material name="frame_grey"><color rgba="0.60 0.60 0.60 1.0"/></material>
+    </visual>
+    <visual name="entry_post_neg_y_vis">
+      <origin xyz="0 -0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+      <material name="frame_grey"/>
+    </visual>
+    <visual name="exit_post_pos_y_vis">
+      <origin xyz="0.80 0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+      <material name="frame_grey"/>
+    </visual>
+    <visual name="exit_post_neg_y_vis">
+      <origin xyz="0.80 -0.425 -0.170" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.29"/></geometry>
+      <material name="frame_grey"/>
+    </visual>
+  </link>
+</robot>

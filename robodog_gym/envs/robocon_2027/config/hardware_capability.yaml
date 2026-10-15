@@ -1,0 +1,63 @@
+schema_version: 1
+robot: mybot_v3
+measured_at: null
+operator: null
+
+model_based_checks:
+  audited_at: 2026-10-11
+  source: scripts/m0_robot_compliance.py
+  total_mass_kg: 14.30
+  standing_envelope_m: [0.659, 0.437, 0.406]
+  foot_bounding_circle_diameter_m: 0.0565
+  minimum_kinematic_height_m: 0.1627
+  note: >-
+    These are MuJoCo model/mesh checks, not physical safety validation. They
+    must not open a high-risk training gate by themselves.
+
+limits:
+  peak_joint_torque_nm: null
+  continuous_joint_torque_nm: null
+  peak_motor_current_a: null
+  max_motor_temperature_c: null
+  max_landing_impact_n: null
+
+capabilities:
+  stable_foot_lift:
+    status: unmeasured
+    measured_m: null
+    required_m: 0.30
+    safety_margin_m: null
+    applies_to: [wall, gully]
+  controlled_gap_crossing:
+    status: unmeasured
+    measured_m: null
+    required_m: 0.36
+    safety_margin_m: null
+    applies_to: [gully, plum_posts]
+  minimum_safe_robot_height:
+    status: unmeasured
+    measured_m: null
+    kinematic_model_minimum_m: 0.1627
+    kinematic_margin_m: 0.1273
+    dynamic_continuous_verified: false
+    required_maximum_m: 0.29
+    continuous_travel_m: 0.80
+    safety_margin_m: null
+    applies_to: [low_frame]
+  single_leg_support:
+    status: unmeasured
+    stable_duration_s: null
+    peak_joint_torque_nm: null
+    applies_to: [plum_posts, tire_array]
+  repeated_landing:
+    status: unmeasured
+    trial_count: 0
+    peak_joint_torque_nm: null
+    peak_motor_temperature_c: null
+    applies_to: [wall, gully]
+
+high_risk_training_gate:
+  required_capabilities:
+    wall: [stable_foot_lift, repeated_landing]
+    gully: [controlled_gap_crossing, repeated_landing]
+    low_frame: [minimum_safe_robot_height]

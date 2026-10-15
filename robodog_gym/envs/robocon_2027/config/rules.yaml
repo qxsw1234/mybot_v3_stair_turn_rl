@@ -1,0 +1,110 @@
+schema_version: 1
+rulebook: "2027年足式机器人挑战赛-V1.0"
+units: si
+
+match:
+  duration_s: 180.0
+  obstacle_count: 8
+  start_zones: 2
+  obstacle_order_free: true
+  control_mode_switch_allowed: false
+  repeat_obstacle_scores: false
+
+scoring:
+  autonomous:
+    ordinary_obstacle: 150
+    gully_ascent: 75
+    gully_gap: 150
+    gully_descent: 75
+    return_to_start: 150
+    maximum: 1500
+  manual:
+    ordinary_obstacle: 100
+    gully_ascent: 50
+    gully_gap: 100
+    gully_descent: 50
+    return_to_start: 100
+    maximum: 1000
+
+obstacles:
+  slalom:
+    pole_count: 6
+    pole_diameter_m: 0.10
+    pole_height_m: 0.10
+    pole_center_spacing_m: 0.90
+    required_zone_diameter_m: 0.30
+    start_zone_to_first_pole_center_m: 0.40
+    corner_zone_offset_m: [0.30, 0.30]
+    required_zones: [start, corner, finish]
+    failure_events: [pole_contact, pole_overflight]
+
+  low_frame:
+    inner_height_m: 0.29
+    inner_width_m: 0.80
+    length_m: 0.80
+    contact_allowed: true
+    failure_events: [violent_collision, frame_displacement]
+
+  wall:
+    height_m: 0.30
+    width_m: 0.80
+    thickness_m: 0.08
+
+  gully:
+    platform_height_m: 0.36
+    platform_length_m: 0.80
+    platform_width_m: 0.80
+    stair_rise_m: 0.12
+    stair_run_m: 0.32
+    stair_width_m: 0.80
+    stair_count: 3
+    gap_width_m: 0.36
+    slope_angle_deg: 20.0
+    outside_ground_failure_fraction: 0.5
+    required_stair_surfaces: [stair_1, stair_2, stair_3]
+
+  brick_wood_pit:
+    short_side_width_m: 1.00
+    long_side_length_m: 2.00
+    guard_height_m: 0.15
+    pine_bark_size_range_m: [0.01, 0.02]
+    outside_ground_failure_fraction: 0.5
+    complete_only: true
+
+  tire_array:
+    tire_spec: "165/70R13"
+    nominal_tread_width_m: 0.165
+    approximate_outer_diameter_m: 0.55
+    approximate_inner_diameter_m: 0.33
+    rows: 2
+    columns: 4
+    entry_side: short
+    exit_side: short
+    outside_ground_failure_fraction: 0.5
+    foot_in_hole_is_rule_failure: false
+    complete_only: true
+
+  plum_posts:
+    block_size_m: [0.20, 0.20, 0.20]
+    platform_size_m: [0.80, 0.80, 0.20]
+    first_block_offsets_m: [0.10, 0.40]
+    inter_row_gap_m: 0.20
+    same_row_gap_m: 0.40
+    require_every_top_contact_once: true
+    outside_ground_failure_fraction: 0.5
+    complete_only: true
+
+  beam:
+    length_m: 3.00
+    width_m: 0.40
+    height_m: 0.10
+    entry_side: short
+    exit_side: short
+    outside_ground_failure_fraction: 0.5
+    complete_only: true
+
+clarifications_required:
+  - id: gully_retry_subscore_retention
+    question: "沟壑组合失败并重新越障时，先前已完成子项的得分是否保留？"
+  - id: low_frame_displacement_threshold
+    question: "限高框架位移或冲击的裁判阈值是否有统一标准？"

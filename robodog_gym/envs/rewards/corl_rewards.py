@@ -217,18 +217,15 @@ class CoRLRewards:
         return torch.square(base_height - self.env.cfg.rewards.base_height_target)
 
     def _reward_low_bar_crouch(self):
-        """Encourage ducking while a low bar is still ahead of the robot.
+        """Guide the robot toward a kinematically feasible crouch pose.
 
-        The velocity-tracking task never asks the robot to lower its body, so
-        without this term there is no incentive to crouch under the bar.
-
-        bar_bottom (rel[:, 2]) is the bar's ground clearance measured from the
-        base: it is 0 when the base sits level with the bar bottom and grows
-        positive as the robot ducks below it.  A linear clearance score keeps
-        a useful gradient even when the robot starts above the bar; the old
-        positive clamp returned exactly zero in that most important failure
-        region.  The score is active only while the bar is ahead, so there is
-        no incentive to stay crouched after passing.
+        A base-height score alone admitted poses whose trunk fitted while a
+        swinging thigh or foot still struck the roof.  M0's mesh-accurate
+        MuJoCo search identified a safer symmetric posture (about 269 mm total
+        height): hip=+/-0.10, thigh=1.60, calf=-2.15 rad.  Blend distance to
+        that posture with the original clearance shaping.  The term is
+        phase-gated to the final approach and tunnel, so it cannot reward
+        remaining crouched after the rear-most geometry clears the frame.
         """
         rel = self.env.low_bar_relative_state()
         forward = rel[:, 0]                      # + = bar ahead in base frame
@@ -237,18 +234,49 @@ class CoRLRewards:
         margin = float(getattr(self.env.cfg.terrain, 'low_bar_crouch_margin', 0.08))
         shaping_span = float(getattr(
             self.env.cfg.terrain, 'low_bar_crouch_shaping_span', 0.20))
-        active = (forward > 0.0) & (forward < approach)
+        length = float(getattr(self.env.cfg.terrain, 'low_bar_length', 0.0))
+        active = (forward > -length) & (forward < approach)
         clearance_deficit = torch.clamp(margin - bar_bottom, min=0.0)
-        crouch = 1.0 - torch.clamp(
+        clearance_score = 1.0 - torch.clamp(
             clearance_deficit / max(shaping_span, 1e-6), 0.0, 1.0)
-        return active.float() * crouch
+
+        cached = getattr(self, '_low_bar_crouch_target_cache', None)
+        if cached is None:
+            hip = float(getattr(
+                self.env.cfg.terrain, 'low_bar_crouch_target_hip', 0.10))
+            thigh = float(getattr(
+                self.env.cfg.terrain, 'low_bar_crouch_target_thigh', 1.60))
+            calf = float(getattr(
+                self.env.cfg.terrain, 'low_bar_crouch_target_calf', -2.15))
+            values = []
+            for name in self.env.dof_names:
+                lname = str(name).lower()
+                if 'hip' in lname:
+                    values.append(
+                        hip if lname.startswith(('fl', 'rl')) else -hip)
+                elif 'thigh' in lname:
+                    values.append(thigh)
+                elif 'calf' in lname:
+                    values.append(calf)
+                else:
+                    values.append(0.0)
+            cached = torch.tensor(
+                values, dtype=self.env.dof_pos.dtype,
+                device=self.env.device).unsqueeze(0)
+            self._low_bar_crouch_target_cache = cached
+        sigma = float(getattr(
+            self.env.cfg.terrain, 'low_bar_crouch_target_sigma', 0.65))
+        pose_error = torch.mean(torch.square(self.env.dof_pos - cached), dim=1)
+        pose_score = torch.exp(-pose_error / max(sigma * sigma, 1e-6))
+        score = 0.35 * clearance_score + 0.65 * pose_score
+        return active.float() * score
 
     def _low_bar_window_state(self):
         """Per-body bar-relative x and z plus the per-env bar clearance."""
         env = self.env
         bar_x = env.env_origins[:, 0] + float(
             getattr(env.cfg.terrain, 'low_bar_x', 2.0))
-        bodies = env.rigid_body_state.view(env.num_envs, env.num_bodies, 13)
+        bodies = env.rigid_body_state
         x_rel = bodies[:, :, 0] - bar_x.unsqueeze(1)
         z = bodies[:, :, 2]
         return x_rel, z, env.low_bar_clearance
@@ -266,26 +294,96 @@ class CoRLRewards:
         Returns the worst violation in metres, so the caller's negative scale
         is a penalty per metre above the allowed height.
 
-        Legs and the trunk get different ceilings.  The first M1.3 block used a
-        single 0.06 m margin for every body; the trunk then dominated the term
-        (it sits near the bar edge anyway) and the penalty saturated at an
-        unreachable value, while the collision rate stayed at 5.8%.  The legs
-        are the measured colliders, so they keep the strict ceiling and the
-        rest of the robot only has to avoid a gross violation.
+        The current rule-aligned version evaluates the true URDF collision
+        envelope, not rigid-body origins.  Every collision primitive therefore
+        shares the same ceiling and safety margin.
         """
         env = self.env
         if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
             return torch.zeros(env.num_envs, device=env.device)
         window = float(getattr(env.cfg.terrain, 'low_bar_body_top_window', 0.35))
-        leg_safety = float(getattr(env.cfg.terrain, 'low_bar_body_top_safety', 0.05))
-        trunk_safety = float(getattr(env.cfg.terrain, 'low_bar_trunk_safety', -0.10))
-        x_rel, z, clearance = self._low_bar_window_state()
-        inside = (x_rel.abs() <= window).float()
-        leg_mask = self._low_bar_leg_mask()
-        ceiling = clearance.unsqueeze(1) - (
-            leg_mask * leg_safety + (1.0 - leg_mask) * trunk_safety)
+        length = float(getattr(env.cfg.terrain, 'low_bar_length', 0.0))
+        safety = float(getattr(
+            env.cfg.terrain, 'low_bar_body_top_safety', 0.01))
+        lower, upper, valid = env.low_bar_collision_bounds()
+        bar_x = env.env_origins[:, 0] + float(
+            getattr(env.cfg.terrain, 'low_bar_x', 2.0))
+        inside = (
+            valid.unsqueeze(0)
+            & (upper[:, :, 0] >= bar_x.unsqueeze(1) - window)
+            & (lower[:, :, 0]
+               <= bar_x.unsqueeze(1) + length)
+        ).float()
+        z = upper[:, :, 2]
+        clearance = env.low_bar_clearance
+        ceiling = clearance.unsqueeze(1) - safety
         excess = torch.clamp(z - ceiling, min=0.0)
         return (excess * inside).amax(dim=1)
+
+    def _reward_low_bar_inside_progress(self):
+        """Reward forward progress while any robot geometry is in the tunnel."""
+        env = self.env
+        if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
+            return torch.zeros(env.num_envs, device=env.device)
+        lower, upper, valid = env.low_bar_collision_bounds()
+        bar_x = env.env_origins[:, 0] + float(
+            getattr(env.cfg.terrain, 'low_bar_x', 2.0))
+        length = float(getattr(env.cfg.terrain, 'low_bar_length', 0.0))
+        overlaps = (
+            valid.unsqueeze(0)
+            & (upper[:, :, 0] >= bar_x.unsqueeze(1))
+            & (lower[:, :, 0] <= bar_x.unsqueeze(1) + length)
+        ).any(dim=1)
+        if getattr(env.cfg.terrain, 'low_bar_pretrain', False):
+            # The standing policy cannot initially reach the tunnel after the
+            # action centre is moved to a crawl pose.  During the dedicated
+            # crawl pretraining stage only, use the same +3 progress term from
+            # the final approach onward.  Hard-frame training retains the
+            # strict tunnel-only definition above.
+            rel = env.low_bar_relative_state()
+            approach = float(getattr(
+                env.cfg.terrain, 'low_bar_crouch_approach', 4.5))
+            approach_or_inside = (
+                (rel[:, 0] > -length) & (rel[:, 0] < approach))
+            overlaps = overlaps | approach_or_inside
+        clean = ~(env.low_bar_collision_this_step
+                  | env.low_bar_missed_gate_this_step)
+        forward_velocity = torch.clamp(env.root_states[:, 7], min=0.0, max=1.0)
+        return overlaps.float() * clean.float() * forward_velocity
+
+    def _reward_low_bar_early_recover(self):
+        """Penalize raising the base before the rear-most geometry exits."""
+        env = self.env
+        if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
+            return torch.zeros(env.num_envs, device=env.device)
+        lower, upper, valid = env.low_bar_collision_bounds()
+        valid_batched = valid.unsqueeze(0)
+        bar_x = env.env_origins[:, 0] + float(
+            getattr(env.cfg.terrain, 'low_bar_x', 2.0))
+        length = float(getattr(env.cfg.terrain, 'low_bar_length', 0.0))
+        front_x = torch.where(
+            valid_batched, upper[:, :, 0],
+            torch.full_like(upper[:, :, 0], float('-inf')),
+        ).amax(dim=1)
+        rear_x = torch.where(
+            valid_batched, lower[:, :, 0],
+            torch.full_like(lower[:, :, 0], float('inf')),
+        ).amin(dim=1)
+        # Start this phase only once the base has entered; front-leg lowering
+        # before entry is already shaped by crouch/body-top rewards.
+        active = (
+            (front_x >= bar_x)
+            & (env.base_pos[:, 0] >= bar_x)
+            & (rear_x <= bar_x + length)
+        )
+        margin = float(getattr(
+            env.cfg.terrain, 'low_bar_crouch_margin', 0.08))
+        span = float(getattr(
+            env.cfg.terrain, 'low_bar_recover_span', 0.06))
+        target = env.low_bar_clearance - margin
+        raised = torch.clamp(
+            (env.base_pos[:, 2] - target) / max(span, 1e-6), 0.0, 1.0)
+        return active.float() * raised
 
     def _low_bar_leg_mask(self):
         """Per-body mask selecting the leg links, cached on first use.
@@ -324,9 +422,10 @@ class CoRLRewards:
         if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
             return torch.zeros(env.num_envs, device=env.device)
         distance = float(getattr(env.cfg.terrain, 'low_bar_recover_distance', 0.35))
+        length = float(getattr(env.cfg.terrain, 'low_bar_length', 0.0))
         span = float(getattr(env.cfg.terrain, 'low_bar_recover_span', 0.06))
         rel = env.low_bar_relative_state()
-        past = (rel[:, 0] < -distance).float()
+        past = (rel[:, 0] < -(length + distance)).float()
         # root_states also holds the low-bar actors, so slice the robots out.
         base_z = env.root_states[:env.num_envs, 2]
         target = env.low_bar_clearance - 0.02
@@ -338,9 +437,17 @@ class CoRLRewards:
         if not getattr(env.cfg.terrain, 'robocon_low_bar', False):
             return torch.zeros(env.num_envs, device=env.device)
         window = float(getattr(env.cfg.terrain, 'low_bar_body_top_window', 0.35))
+        length = float(getattr(env.cfg.terrain, 'low_bar_length', 0.0))
         minimum = float(getattr(env.cfg.terrain, 'low_bar_crossing_min_vx', 0.25))
-        x_rel, _, _ = self._low_bar_window_state()
-        inside = (x_rel.abs() <= window).any(dim=1).float()
+        lower, upper, valid = env.low_bar_collision_bounds()
+        bar_x = env.env_origins[:, 0] + float(
+            getattr(env.cfg.terrain, 'low_bar_x', 2.0))
+        inside = (
+            valid.unsqueeze(0)
+            & (upper[:, :, 0] >= bar_x.unsqueeze(1) - window)
+            & (lower[:, :, 0]
+               <= bar_x.unsqueeze(1) + length)
+        ).any(dim=1).float()
         return inside * torch.clamp(minimum - env.base_lin_vel[:, 0], min=0.0)
 
     def _reward_low_bar_alignment(self):

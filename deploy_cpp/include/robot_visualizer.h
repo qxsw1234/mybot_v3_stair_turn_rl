@@ -32,12 +32,19 @@ public:
    * @brief Publish current joint positions as JointState message.
    * @param dof_pos  Joint positions [rad], size NUM_JOINTS (12)
    * @param dof_vel  Joint velocities [rad/s], size NUM_JOINTS (12)
+   * @param dof_tau  Optional measured joint torques [N m]; omitted when unavailable
    */
   void publish_joint_states(const std::array<float, NUM_JOINTS> &dof_pos,
-                            const std::array<float, NUM_JOINTS> &dof_vel);
+                            const std::array<float, NUM_JOINTS> &dof_vel,
+                            const std::array<float, NUM_JOINTS> *dof_tau = nullptr);
+
+  /** Publish the 12 position targets sent to the motor driver [rad]. */
+  void publish_joint_targets(const std::array<float, NUM_JOINTS> &targets);
 
 private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr target_pub_;
+  rclcpp::Clock::SharedPtr clock_;
   std::vector<std::string> joint_names_;
 };
 

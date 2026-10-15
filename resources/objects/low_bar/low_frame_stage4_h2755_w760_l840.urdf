@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!-- Curriculum robustness stage 4: inner HxWxL = 0.2755 x 0.76 x 0.84 m. -->
+<robot name="robocon_2027_low_frame_stage4">
+  <link name="low_frame">
+    <collision name="roof"><origin xyz="0.42 0 0"/><geometry><box size="0.84 0.86 0.05"/></geometry></collision>
+    <collision name="entry_post_pos_y"><origin xyz="0 0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry></collision>
+    <collision name="entry_post_neg_y"><origin xyz="0 -0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry></collision>
+    <collision name="exit_post_pos_y"><origin xyz="0.84 0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry></collision>
+    <collision name="exit_post_neg_y"><origin xyz="0.84 -0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry></collision>
+    <visual name="roof_vis"><origin xyz="0.42 0 0"/><geometry><box size="0.84 0.86 0.05"/></geometry><material name="red"><color rgba="0.8 0.1 0.1 1"/></material></visual>
+    <visual name="entry_post_pos_y_vis"><origin xyz="0 0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry><material name="grey"><color rgba="0.6 0.6 0.6 1"/></material></visual>
+    <visual name="entry_post_neg_y_vis"><origin xyz="0 -0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry><material name="grey"/></visual>
+    <visual name="exit_post_pos_y_vis"><origin xyz="0.84 0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry><material name="grey"/></visual>
+    <visual name="exit_post_neg_y_vis"><origin xyz="0.84 -0.405 -0.16275"/><geometry><box size="0.05 0.05 0.2755"/></geometry><material name="grey"/></visual>
+  </link>
+</robot>

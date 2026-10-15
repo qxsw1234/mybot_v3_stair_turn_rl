@@ -133,10 +133,8 @@ class LeggedRobot(BaseTask):
         self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:self.num_envs, 10:13])
         self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
 
-        self.foot_velocities = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13
-                                                          )[:, self.feet_indices, 7:10]
-        self.foot_positions = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices,
-                              0:3]
+        self.foot_velocities = self.rigid_body_state[:, self.feet_indices, 7:10]
+        self.foot_positions = self.rigid_body_state[:, self.feet_indices, 0:3]
 
         self._update_low_bar_task_state()
         
@@ -198,7 +196,9 @@ class LeggedRobot(BaseTask):
 
             self.reset_buf |= self.body_orientation_termination_buf
 
-        if getattr(self.cfg.terrain, 'robocon_low_bar', False):
+        if (getattr(self.cfg.terrain, 'robocon_low_bar', False)
+                and not getattr(
+                    self.cfg.terrain, 'low_bar_external_evaluator', False)):
             # A bar/post touch or crossing outside the opening is a task
             # failure. Successful recovery is also terminal, but it is added
             # only after early_termi_buf is captured so PPO does not label a
@@ -286,6 +286,13 @@ class LeggedRobot(BaseTask):
                 self.low_bar_passed_in_gate[train_env_ids].float().mean())
             self.extras["train/episode"]["low_bar_collision_rate"] = (
                 self.low_bar_collision_ever[train_env_ids].float().mean())
+            self.extras["train/episode"]["low_bar_envelope_violation_rate"] = (
+                self.low_bar_envelope_violation_ever[
+                    train_env_ids].float().mean())
+            self.extras["train/episode"]["low_bar_contact_rate"] = (
+                self.low_bar_contact_ever[train_env_ids].float().mean())
+            self.extras["train/episode"]["low_bar_contact_steps"] = (
+                self.low_bar_contact_steps[train_env_ids].float().mean())
             self.extras["train/episode"]["low_bar_missed_gate_rate"] = (
                 self.low_bar_missed_gate_ever[train_env_ids].float().mean())
             self.extras["train/episode"]["low_bar_max_force"] = (
@@ -343,11 +350,16 @@ class LeggedRobot(BaseTask):
             self.low_bar_crossed_plane[env_ids] = False
             self.low_bar_passed_in_gate[env_ids] = False
             self.low_bar_collision_ever[env_ids] = False
+            self.low_bar_envelope_violation_ever[env_ids] = False
             self.low_bar_missed_gate_ever[env_ids] = False
             self.low_bar_success_ever[env_ids] = False
+            self.low_bar_contact_ever[env_ids] = False
+            self.low_bar_contact_steps[env_ids] = 0
             self.low_bar_post_pass_stable_steps[env_ids] = 0
             self.low_bar_max_contact_force[env_ids] = 0.0
             self.low_bar_collision_this_step[env_ids] = False
+            self.low_bar_contact_this_step[env_ids] = False
+            self.low_bar_envelope_violation_this_step[env_ids] = False
             self.low_bar_missed_gate_this_step[env_ids] = False
             self.low_bar_just_passed[env_ids] = False
             self.low_bar_success_this_step[env_ids] = False
@@ -370,7 +382,9 @@ class LeggedRobot(BaseTask):
         if len(env_ids) == 0:
             return
 
-        env_ids_int32 = env_ids.to(dtype=torch.int32).to(self.device)
+        env_ids = env_ids.to(dtype=torch.long, device=self.device)
+        actor_ids_int32 = self.robot_actor_indices.index_select(
+            0, env_ids).to(dtype=torch.int32)
 
         # joints
         if dof_pos is not None:
@@ -379,14 +393,14 @@ class LeggedRobot(BaseTask):
 
             self.gym.set_dof_state_tensor_indexed(self.sim,
                                                   gymtorch.unwrap_tensor(self.dof_state),
-                                                  gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+                                                  gymtorch.unwrap_tensor(actor_ids_int32), len(actor_ids_int32))
 
         # base position
         self.root_states[env_ids] = base_state.to(self.device)
 
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.root_states),
-                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+                                                     gymtorch.unwrap_tensor(self.all_root_states),
+                                                     gymtorch.unwrap_tensor(actor_ids_int32), len(actor_ids_int32))
 
     def compute_reward(self):
         """ Compute rewards
@@ -479,11 +493,11 @@ class LeggedRobot(BaseTask):
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target) \
 
     def set_main_agent_pose(self, loc, quat):
-        robot_ids = torch.zeros(1, dtype=torch.int32, device=self.device)
+        robot_ids = self.robot_actor_indices[:1].to(dtype=torch.int32)
         self.root_states[0, 0:3] = torch.Tensor(loc)
         self.root_states[0, 3:7] = torch.Tensor(quat)
         self.gym.set_actor_root_state_tensor_indexed(
-            self.sim, gymtorch.unwrap_tensor(self.root_states),
+            self.sim, gymtorch.unwrap_tensor(self.all_root_states),
             gymtorch.unwrap_tensor(robot_ids), 1)
 
     # ------------- Callbacks --------------
@@ -1276,14 +1290,17 @@ class LeggedRobot(BaseTask):
         Args:
             env_ids (List[int]): Environemnt ids
         """
-        self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dof),
-                                                                        device=self.device)
+        scale_range = getattr(cfg.init_state, "dof_pos_scale_range", [0.5, 1.5])
+        self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(
+            float(scale_range[0]), float(scale_range[1]),
+            (len(env_ids), self.num_dof), device=self.device)
         self.dof_vel[env_ids] = 0.
 
-        env_ids_int32 = env_ids.to(dtype=torch.int32)
+        actor_ids_int32 = self.robot_actor_indices.index_select(
+            0, env_ids.to(dtype=torch.long)).to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
-                                              gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+                                              gymtorch.unwrap_tensor(actor_ids_int32), len(actor_ids_int32))
 
     def _reset_root_states(self, env_ids, cfg):
         """ Resets ROOT states position and velocities of selected environmments
@@ -1316,12 +1333,16 @@ class LeggedRobot(BaseTask):
         self.root_states[env_ids, 3:7] = quat
 
         # base velocities
-        self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6),
-                                                           device=self.device)  # [7:10]: lin vel, [10:13]: ang vel
-        env_ids_int32 = env_ids.to(dtype=torch.int32)
+        velocity_half_range = float(getattr(
+            cfg.init_state, "base_velocity_half_range", 0.5))
+        self.root_states[env_ids, 7:13] = torch_rand_float(
+            -velocity_half_range, velocity_half_range, (len(env_ids), 6),
+            device=self.device)  # [7:10]: lin vel, [10:13]: ang vel
+        actor_ids_int32 = self.robot_actor_indices.index_select(
+            0, env_ids.to(dtype=torch.long)).to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.root_states),
-                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+                                                     gymtorch.unwrap_tensor(self.all_root_states),
+                                                     gymtorch.unwrap_tensor(actor_ids_int32), len(actor_ids_int32))
 
         if cfg.env.record_video and self.record_env_id in env_ids:
             if self.complete_video_frames is None:
@@ -1346,9 +1367,10 @@ class LeggedRobot(BaseTask):
             max_vel = cfg.domain_rand.max_push_vel_xy
             self.root_states[env_ids, 7:9] = torch_rand_float(-max_vel, max_vel, (len(env_ids), 2),
                                                               device=self.device)  # lin vel x/y
-            push_ids = env_ids.to(dtype=torch.int32)
+            push_ids = self.robot_actor_indices.index_select(
+                0, env_ids.to(dtype=torch.long)).to(dtype=torch.int32)
             self.gym.set_actor_root_state_tensor_indexed(
-                self.sim, gymtorch.unwrap_tensor(self.root_states),
+                self.sim, gymtorch.unwrap_tensor(self.all_root_states),
                 gymtorch.unwrap_tensor(push_ids), len(push_ids))
 
     def _teleport_robots(self, env_ids, cfg):
@@ -1373,9 +1395,10 @@ class LeggedRobot(BaseTask):
                 self.root_states[env_ids, 1] > cfg.terrain.terrain_width * cfg.terrain.num_cols - thresh]
             self.root_states[high_y_ids, 1] -= cfg.terrain.terrain_width * (cfg.terrain.num_cols - 1)
 
-            tele_ids = env_ids.to(dtype=torch.int32)
+            tele_ids = self.robot_actor_indices.index_select(
+                0, env_ids.to(dtype=torch.long)).to(dtype=torch.int32)
             self.gym.set_actor_root_state_tensor_indexed(
-                self.sim, gymtorch.unwrap_tensor(self.root_states),
+                self.sim, gymtorch.unwrap_tensor(self.all_root_states),
                 gymtorch.unwrap_tensor(tele_ids), len(tele_ids))
             self.gym.refresh_actor_root_state_tensor(self.sim)
 
@@ -1394,65 +1417,131 @@ class LeggedRobot(BaseTask):
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.render_all_camera_sensors(self.sim)
 
-        # create some wrapper tensors for different slices
-        self.root_states = gymtorch.wrap_tensor(actor_root_state)
+        # Isaac Gym requires all actors in one environment to be created before
+        # the next environment.  Low-bar mode therefore has the simulator actor
+        # layout [robot0, bar0, robot1, bar1, ...].  Keep explicit strided
+        # robot/bar views, and always pass the full backing tensor plus actual
+        # simulator actor indices to indexed Gym setters.
+        self.all_root_states = gymtorch.wrap_tensor(actor_root_state)
+        low_bar_enabled = bool(getattr(
+            self.cfg.terrain, 'robocon_low_bar', False))
+        self.robot_actor_indices = torch.as_tensor([
+            self.gym.get_actor_index(
+                self.envs[i], self.actor_handles[i], gymapi.DOMAIN_SIM)
+            for i in range(self.num_envs)
+        ], dtype=torch.long, device=self.device)
+        if low_bar_enabled:
+            if len(self.low_bar_actor_handles) != self.num_envs:
+                raise RuntimeError(
+                    'Expected one low-bar actor per environment, got '
+                    f'{len(self.low_bar_actor_handles)} for {self.num_envs} envs')
+            self.low_bar_actor_indices = torch.as_tensor([
+                self.gym.get_actor_index(
+                    self.envs[i], self.low_bar_actor_handles[i], gymapi.DOMAIN_SIM)
+                for i in range(self.num_envs)
+            ], dtype=torch.long, device=self.device)
+            expected_robot_actors = 2 * torch.arange(
+                self.num_envs, dtype=torch.long, device=self.device)
+            expected_bar_actors = expected_robot_actors + 1
+            if (not torch.equal(self.robot_actor_indices, expected_robot_actors)
+                    or not torch.equal(
+                        self.low_bar_actor_indices, expected_bar_actors)
+                    or self.all_root_states.shape[0] != 2 * self.num_envs):
+                raise RuntimeError(
+                    'Unsupported low-bar actor tensor layout: expected '
+                    '[robot0, bar0, robot1, bar1, ...]')
+            actor_states = self.all_root_states.view(self.num_envs, 2, 13)
+            self.root_states = actor_states[:, 0, :]
+            self.low_bar_root_states = actor_states[:, 1, :]
+        else:
+            self.low_bar_actor_indices = torch.empty(
+                0, dtype=torch.long, device=self.device)
+            self.root_states = self.all_root_states[:self.num_envs]
+            self.low_bar_root_states = self.all_root_states.new_empty((0, 13))
+
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.all_net_contact_forces = gymtorch.wrap_tensor(net_contact_forces)
-        self.net_contact_forces = self.all_net_contact_forces[:self.num_envs * self.num_bodies, :]
-        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
-        self.base_pos = self.root_states[:self.num_envs, 0:3]
-        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
-        self.base_quat = self.root_states[:self.num_envs, 3:7]
-        self.rigid_body_state = gymtorch.wrap_tensor(rigid_body_state)[:self.num_envs * self.num_bodies, :]
-        self.foot_velocities = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:,
-                               self.feet_indices,
-                               7:10]
-        self.foot_positions = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices,
-                              0:3]
+        self.dof_pos = self.dof_state.view(
+            self.num_envs, self.num_dof, 2)[..., 0]
+        self.base_pos = self.root_states[:, 0:3]
+        self.dof_vel = self.dof_state.view(
+            self.num_envs, self.num_dof, 2)[..., 1]
+        self.base_quat = self.root_states[:, 3:7]
+        self.all_rigid_body_state = gymtorch.wrap_tensor(rigid_body_state)
+
+        if low_bar_enabled:
+            bodies_per_env = self.num_bodies + 1
+            expected_total_bodies = self.num_envs * bodies_per_env
+            if self.all_rigid_body_state.shape[0] != expected_total_bodies:
+                raise RuntimeError(
+                    'Unexpected low-bar rigid-body tensor size: '
+                    f'{self.all_rigid_body_state.shape[0]} != '
+                    f'{expected_total_bodies}')
+            body_states = self.all_rigid_body_state.view(
+                self.num_envs, bodies_per_env, 13)
+            force_states = self.all_net_contact_forces.view(
+                self.num_envs, bodies_per_env, 3)
+            self.rigid_body_state = body_states[:, :self.num_bodies, :]
+            self.contact_forces = force_states[:, :self.num_bodies, :]
+            self.low_bar_contact_forces = force_states[:, self.num_bodies, :]
+        else:
+            self.rigid_body_state = self.all_rigid_body_state[
+                :self.num_envs * self.num_bodies].view(
+                    self.num_envs, self.num_bodies, 13)
+            self.contact_forces = self.all_net_contact_forces[
+                :self.num_envs * self.num_bodies].view(
+                    self.num_envs, self.num_bodies, 3)
+            self.low_bar_contact_forces = torch.zeros(
+                self.num_envs, 3, dtype=torch.float, device=self.device)
+        self.net_contact_forces = self.contact_forces
+        self.foot_velocities = self.rigid_body_state[
+            :, self.feet_indices, 7:10]
+        self.foot_positions = self.rigid_body_state[
+            :, self.feet_indices, 0:3]
         self.prev_base_pos = self.base_pos.clone()
         self.prev_foot_velocities = self.foot_velocities.clone()
 
         self.lag_buffer = [torch.zeros_like(self.dof_pos) for i in range(self.cfg.domain_rand.lag_timesteps+1)]
 
-        self.contact_forces = self.all_net_contact_forces[:self.num_envs * self.num_bodies, :].view(self.num_envs, -1,
-                                                                            3)  # shape: num_envs, num_bodies, xyz axis
-
-        if getattr(self.cfg.terrain, 'robocon_low_bar', False):
-            # Never infer simulator-domain rigid-body indices from actor
-            # creation order. Isaac Gym explicitly warns that adding actors
-            # to an earlier env can change tensor layout, and a wrong slice
-            # silently turns robot/ground contacts into low-bar collisions.
-            if len(self.low_bar_actor_handles) != self.num_envs:
-                raise RuntimeError(
-                    'Expected one low-bar actor per environment, got '
-                    f'{len(self.low_bar_actor_handles)} for {self.num_envs} envs')
+        if low_bar_enabled:
             self.low_bar_body_indices = torch.as_tensor([
                 self.gym.get_actor_rigid_body_index(
                     self.envs[i], self.low_bar_actor_handles[i], 0,
                     gymapi.DOMAIN_SIM)
                 for i in range(self.num_envs)
             ], dtype=torch.long, device=self.device)
-            if (self.low_bar_body_indices < 0).any():
-                raise RuntimeError('Failed to resolve one or more low-bar rigid-body indices')
-            self.low_bar_contact_forces = self.all_net_contact_forces.index_select(
-                0, self.low_bar_body_indices)
+            expected_bar_bodies = (
+                torch.arange(
+                    self.num_envs, dtype=torch.long, device=self.device)
+                * (self.num_bodies + 1) + self.num_bodies)
+            if not torch.equal(self.low_bar_body_indices, expected_bar_bodies):
+                raise RuntimeError(
+                    'Unsupported low-bar rigid-body layout: expected one bar '
+                    'body after each robot body block')
         else:
             self.low_bar_body_indices = torch.empty(
                 0, dtype=torch.long, device=self.device)
-            self.low_bar_contact_forces = torch.zeros(
-                self.num_envs, 3, dtype=torch.float, device=self.device)
 
         self.low_bar_crossed_plane = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device)
         self.low_bar_passed_in_gate = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_collision_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_envelope_violation_ever = torch.zeros_like(
+            self.low_bar_crossed_plane)
         self.low_bar_missed_gate_ever = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_success_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_contact_ever = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_collision_this_step = torch.zeros_like(self.low_bar_crossed_plane)
+        self.low_bar_contact_this_step = torch.zeros_like(
+            self.low_bar_crossed_plane)
+        self.low_bar_envelope_violation_this_step = torch.zeros_like(
+            self.low_bar_crossed_plane)
         self.low_bar_missed_gate_this_step = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_just_passed = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_success_this_step = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_post_pass_stable_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device)
+        self.low_bar_contact_steps = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device)
         self.low_bar_max_contact_force = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device)
@@ -1862,8 +1951,8 @@ class LeggedRobot(BaseTask):
         self.robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
 
         # ---- ROBOCON low-bar (限高杆) obstacle asset ----
-        # A single fixed-base link holding the cross-bar + two posts as three
-        # box shapes, so each env costs exactly one actor.  Loaded only when
+        # A single fixed-base link holding the roof and four corner posts, so
+        # each env costs exactly one actor.  Loaded only when
         # the low-bar mode is requested, so the mixed/stairs configs are
         # byte-for-byte unaffected.
         self.low_bar_asset = None
@@ -1875,8 +1964,13 @@ class LeggedRobot(BaseTask):
             lb_options.disable_gravity = True
             lb_options.collapse_fixed_joints = True
             self.low_bar_asset = self.gym.load_asset(
-                self.sim, os.path.dirname(lb_path), os.path.basename(lb_path), lb_options)
-            print('ROBOCON low_bar: loaded asset from', lb_path)
+                self.sim, os.path.dirname(lb_path), os.path.basename(lb_path),
+                lb_options)
+            low_bar_shape_count = self.gym.get_asset_rigid_shape_count(
+                self.low_bar_asset)
+            print(
+                'ROBOCON low_bar: loaded asset from', lb_path,
+                f'({low_bar_shape_count} collision shapes)')
         self.num_dof = self.gym.get_asset_dof_count(self.robot_asset)
         self.num_actuated_dof = self.num_actions
         self.num_bodies = self.gym.get_asset_rigid_body_count(self.robot_asset)
@@ -1930,8 +2024,9 @@ class LeggedRobot(BaseTask):
 
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i) # set randomized friction & restitution for props
             self.gym.set_asset_rigid_shape_properties(self.robot_asset, rigid_shape_props)
-            anymal_handle = self.gym.create_actor(env_handle, self.robot_asset, start_pose, "anymal", i,
-                                                  self.cfg.asset.self_collisions, 0)
+            anymal_handle = self.gym.create_actor(
+                env_handle, self.robot_asset, start_pose, "anymal", i,
+                self.cfg.asset.self_collisions, 0)
             dof_props = self._process_dof_props(dof_props_asset, i)
             self.gym.set_actor_dof_properties(env_handle, anymal_handle, dof_props)
             body_props = self.gym.get_actor_rigid_body_properties(env_handle, anymal_handle)
@@ -1940,21 +2035,29 @@ class LeggedRobot(BaseTask):
             self.envs.append(env_handle)
             self.actor_handles.append(anymal_handle)
 
-        # ---- ROBOCON low-bar (限高杆) actors ----
-        # Created in a SEPARATE pass, after every robot, so the global actor
-        # ordering stays robot[0..N-1] then bar[0..N-1].  Creating the bar
-        # inside the robot loop would interleave it and corrupt the
-        # root_states[:num_envs] / rigid_body_state / net_contact_forces
-        # slices used throughout the env.  group=i + filter=0 collides with
-        # this env's robot only (Isaac Gym rule:
-        #   collide <=> same group AND (filterA & filterB) == 0).
-        if self.low_bar_asset is not None:
-            for i in range(self.num_envs):
+            # Isaac Gym requires every actor to be added to an environment
+            # before the next environment is created.  The previous separate
+            # bar pass violated that rule and produced physically impossible
+            # low-bar successes.  _init_buffers handles this interleaved actor
+            # and rigid-body layout explicitly.
+            if self.low_bar_asset is not None:
                 lb_pose = gymapi.Transform()
                 lb_pose.p = gymapi.Vec3(*self._low_bar_world_pose(i))
                 lb_handle = self.gym.create_actor(
-                    self.envs[i], self.low_bar_asset, lb_pose, "low_bar", i, 0)
+                    env_handle, self.low_bar_asset, lb_pose, "low_bar", i, 0)
                 self.low_bar_actor_handles.append(lb_handle)
+                if i == 0:
+                    robot_filters = sorted({
+                        int(prop.filter) for prop in
+                        self.gym.get_actor_rigid_shape_properties(
+                            env_handle, anymal_handle)})
+                    bar_filters = sorted({
+                        int(prop.filter) for prop in
+                        self.gym.get_actor_rigid_shape_properties(
+                            env_handle, lb_handle)})
+                    print(
+                        'ROBOCON low_bar: actor collision filters',
+                        f'robot={robot_filters}', f'bar={bar_filters}')
 
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         # Cache the rigid-body order once, while the gym API is still safe to
@@ -2093,30 +2196,123 @@ class LeggedRobot(BaseTask):
             valid,
         ], dim=-1)
 
+    def low_bar_collision_bounds(self):
+        """World AABBs of the robot's actual URDF collision primitives.
+
+        Rigid-body origins are not geometry: for mybot-v3 the trunk extends
+        0.10 m above its origin and 0.125 m laterally, while thigh/calf boxes
+        are offset from their link frames.  Low-frame pass and shaping logic
+        must therefore use the collision envelope shared with MuJoCo rather
+        than link origins, otherwise a policy can clip or walk around the frame
+        and still be counted as successful.
+
+        Returns ``(lower, upper, valid)`` with shapes ``(N, B, 3)``,
+        ``(N, B, 3)`` and ``(B,)``.  Links without collision geometry (IMU and
+        payload placeholders) are excluded by ``valid``.
+        """
+        cache = getattr(self, '_low_bar_collision_shape_cache', None)
+        if cache is None:
+            centers = torch.zeros(
+                self.num_bodies, 3, dtype=torch.float, device=self.device)
+            half_axes = torch.zeros(
+                self.num_bodies, 3, 3, dtype=torch.float, device=self.device)
+            radii = torch.zeros(
+                self.num_bodies, dtype=torch.float, device=self.device)
+            valid = torch.zeros(
+                self.num_bodies, dtype=torch.bool, device=self.device)
+
+            def set_box(index, center, half, rotation=None):
+                centers[index] = torch.tensor(
+                    center, dtype=torch.float, device=self.device)
+                basis = torch.eye(3, dtype=torch.float, device=self.device)
+                if rotation is not None:
+                    basis = torch.tensor(
+                        rotation, dtype=torch.float, device=self.device)
+                half_axes[index] = basis * torch.tensor(
+                    half, dtype=torch.float, device=self.device).unsqueeze(0)
+                valid[index] = True
+
+            for index, raw_name in enumerate(self.body_names):
+                name = str(raw_name)
+                if name == 'body':
+                    set_box(index, (0.0, 0.0, 0.0),
+                            (0.15, 0.125, 0.10))
+                elif name.endswith('_hip'):
+                    centre_x = -0.09 if name.startswith(('RL', 'RR')) else 0.09
+                    set_box(index, (centre_x, 0.0, 0.0),
+                            (0.025, 0.025, 0.025))
+                elif name.endswith('_thigh'):
+                    centre_y = -0.08 if name.startswith(('FR', 'RR')) else 0.08
+                    set_box(index, (0.0, centre_y, -0.10),
+                            (0.02, 0.02, 0.10))
+                elif name.endswith('_calf'):
+                    angle = -0.30
+                    c, s = float(torch.cos(torch.tensor(angle))), float(
+                        torch.sin(torch.tensor(angle)))
+                    rotation = ((c, 0.0, s),
+                                (0.0, 1.0, 0.0),
+                                (-s, 0.0, c))
+                    set_box(index, (0.0, 0.0, -0.11),
+                            (0.015, 0.025, 0.10), rotation)
+                elif name.endswith('_foot'):
+                    radii[index] = 0.02
+                    valid[index] = True
+
+            cache = (centers, half_axes, radii, valid)
+            self._low_bar_collision_shape_cache = cache
+
+        centers, half_axes, radii, valid = cache
+        bodies = self.rigid_body_state
+        quaternions = bodies[:, :, 3:7]
+        flat_quaternions = quaternions.reshape(-1, 4)
+        flat_centers = centers.unsqueeze(0).expand(
+            self.num_envs, -1, -1).reshape(-1, 3)
+        world_centers = bodies[:, :, :3] + quat_apply(
+            flat_quaternions, flat_centers).view(
+                self.num_envs, self.num_bodies, 3)
+
+        extents = radii.view(1, self.num_bodies, 1).expand(
+            self.num_envs, -1, 3).clone()
+        for axis in range(3):
+            local_half_axis = half_axes[:, :, axis].unsqueeze(0).expand(
+                self.num_envs, -1, -1).reshape(-1, 3)
+            extents += quat_apply(
+                flat_quaternions, local_half_axis).abs().view(
+                    self.num_envs, self.num_bodies, 3)
+
+        lower = world_centers - extents
+        upper = world_centers + extents
+        return lower, upper, valid
+
     def _update_low_bar_task_state(self):
         """Update exact, one-shot low-bar task events for reward and metrics."""
         self.low_bar_collision_this_step[:] = False
+        self.low_bar_contact_this_step[:] = False
+        self.low_bar_envelope_violation_this_step[:] = False
         self.low_bar_missed_gate_this_step[:] = False
         self.low_bar_just_passed[:] = False
         self.low_bar_success_this_step[:] = False
         if not getattr(self.cfg.terrain, 'robocon_low_bar', False):
             return
 
-        # index_select must run after every contact-tensor refresh: unlike a
-        # basic slice it returns a copy, not a live view into the Gym tensor.
-        self.low_bar_contact_forces = self.all_net_contact_forces.index_select(
-            0, self.low_bar_body_indices)
         contact_force = torch.linalg.vector_norm(
             self.low_bar_contact_forces, dim=1)
         contact_threshold = float(getattr(
             self.cfg.terrain, 'low_bar_contact_force_threshold', 1.0))
-        self.low_bar_collision_this_step[:] = contact_force > contact_threshold
-        self.low_bar_collision_ever |= self.low_bar_collision_this_step
+        excessive_threshold = float(getattr(
+            self.cfg.terrain, 'low_bar_excessive_force_threshold', 250.0))
+        self.low_bar_contact_this_step[:] = contact_force > contact_threshold
+        self.low_bar_contact_ever |= self.low_bar_contact_this_step
+        self.low_bar_contact_steps += self.low_bar_contact_this_step.long()
+        # Rulebook contact is not itself a failure.  Only a provisionally
+        # excessive impact (or the geometry envelope violation below) is a
+        # task collision; the physical threshold must be calibrated later.
+        self.low_bar_collision_this_step[:] = contact_force > excessive_threshold
         self.low_bar_max_contact_force[:] = torch.maximum(
             self.low_bar_max_contact_force, contact_force)
 
-        robot_bodies = self.rigid_body_state.view(
-            self.num_envs, self.num_bodies, 13)
+        collision_lower, collision_upper, collision_valid = (
+            self.low_bar_collision_bounds())
         bar_x = self.env_origins[:, 0] + float(
             getattr(self.cfg.terrain, 'low_bar_x', 2.0))
 
@@ -2140,21 +2336,73 @@ class LeggedRobot(BaseTask):
                     cmax + (cmin - cmax) * levels.float() / (num_rows - 1))
         pass_margin = float(getattr(
             self.cfg.terrain, 'low_bar_pass_margin', 0.05))
-        whole_robot_x = robot_bodies[:, :, 0].amin(dim=1)
-        crossed_plane = whole_robot_x > bar_x + pass_margin
+        frame_length = float(getattr(
+            self.cfg.terrain, 'low_bar_length', 0.0))
+        valid = collision_valid.unsqueeze(0)
+        envelope_tolerance = float(getattr(
+            self.cfg.terrain, 'low_bar_envelope_tolerance', 0.005))
+        overlaps_tunnel = (
+            valid
+            & (collision_upper[:, :, 0] >= bar_x.unsqueeze(1))
+            & (collision_lower[:, :, 0]
+               <= bar_x.unsqueeze(1) + frame_length)
+        )
+        self.low_bar_envelope_violation_this_step[:] = (
+            overlaps_tunnel
+            & (collision_upper[:, :, 2]
+               > self.low_bar_clearance.unsqueeze(1) + envelope_tolerance)
+        ).any(dim=1)
+        self.low_bar_envelope_violation_ever |= (
+            self.low_bar_envelope_violation_this_step)
+        if not getattr(self.cfg.terrain, 'low_bar_pretrain', False):
+            self.low_bar_collision_this_step |= (
+                self.low_bar_envelope_violation_this_step)
+        self.low_bar_collision_ever |= self.low_bar_collision_this_step
+        whole_robot_x = torch.where(
+            valid,
+            collision_lower[:, :, 0],
+            torch.full_like(collision_lower[:, :, 0], float('inf')),
+        ).amin(dim=1)
+        crossed_plane = whole_robot_x > bar_x + frame_length + pass_margin
         first_crossing = crossed_plane & ~self.low_bar_crossed_plane
 
-        body_lateral_extent = (
-            robot_bodies[:, :, 1] - self.env_origins[:, 1].unsqueeze(1)
-        ).abs().amax(dim=1)
+        origin_y = self.env_origins[:, 1].unsqueeze(1)
+        lateral_extent = torch.maximum(
+            (collision_lower[:, :, 1] - origin_y).abs(),
+            (collision_upper[:, :, 1] - origin_y).abs(),
+        )
+        lateral_extent = torch.where(
+            valid, lateral_extent, torch.zeros_like(lateral_extent))
+        body_lateral_extent = lateral_extent.amax(dim=1)
         opening_half_width = (
             0.5 * float(getattr(self.cfg.terrain, 'low_bar_width', 1.0))
-            - float(getattr(self.cfg.terrain, 'low_bar_thickness', 0.05))
             - float(getattr(self.cfg.terrain, 'low_bar_gate_margin', 0.02))
         )
+        # Reject a side bypass while it happens.  The previous implementation
+        # checked lateral position only after the rear-most rigid-body origin
+        # had cleared the gate, by which time a policy could walk around a post
+        # and re-centre to receive a false pass.
+        # Alignment may be shaped before entry, but a side bypass is a rule
+        # failure only while robot geometry actually overlaps the tunnel.
+        near_frame = (
+            valid
+            & (collision_upper[:, :, 0] >= bar_x.unsqueeze(1))
+            & (collision_lower[:, :, 0]
+               <= bar_x.unsqueeze(1) + frame_length)
+        )
+        near_frame_lateral_extent = torch.where(
+            near_frame, lateral_extent,
+            torch.zeros_like(lateral_extent)).amax(dim=1)
+        bypassed_frame = (
+            near_frame.any(dim=1)
+            & (near_frame_lateral_extent >= opening_half_width)
+        )
         inside_gate = body_lateral_extent < opening_half_width
-        self.low_bar_just_passed[:] = first_crossing & inside_gate
-        self.low_bar_missed_gate_this_step[:] = first_crossing & ~inside_gate
+        self.low_bar_just_passed[:] = (
+            first_crossing & inside_gate
+            & ~self.low_bar_missed_gate_ever & ~bypassed_frame)
+        self.low_bar_missed_gate_this_step[:] = (
+            bypassed_frame | (first_crossing & ~inside_gate))
         self.low_bar_crossed_plane |= first_crossing
         self.low_bar_passed_in_gate |= self.low_bar_just_passed
         self.low_bar_missed_gate_ever |= self.low_bar_missed_gate_this_step
@@ -2187,6 +2435,7 @@ class LeggedRobot(BaseTask):
             recovered
             & ~self.low_bar_success_ever
             & ~self.low_bar_collision_ever
+            & ~self.low_bar_envelope_violation_ever
             & ~self.low_bar_missed_gate_ever
         )
         self.low_bar_success_ever |= self.low_bar_success_this_step
@@ -2210,23 +2459,21 @@ class LeggedRobot(BaseTask):
             return
         if not self.low_bar_actor_handles:
             return
-        # GPU-pipeline safe: the bar actors occupy rows [num_envs : 2*num_envs]
-        # of the actor root-state tensor, so update them there and push with the
-        # indexed tensor API (get/set_actor_rigid_body_states is illegal once
-        # the sim has started under use_gpu_pipeline).
+        # GPU-pipeline safe: update the strided bar view and push the full
+        # backing actor tensor with explicit simulator actor indices.
         env_ids = env_ids.to(dtype=torch.long)
-        bar_ids = env_ids + self.num_envs
         for e in env_ids.tolist():
             x, y, z = self._low_bar_world_pose(e)
-            self.root_states[e + self.num_envs, 0] = x
-            self.root_states[e + self.num_envs, 1] = y
-            self.root_states[e + self.num_envs, 2] = z
-            self.root_states[e + self.num_envs, 3:7] = torch.tensor(
+            self.low_bar_root_states[e, 0] = x
+            self.low_bar_root_states[e, 1] = y
+            self.low_bar_root_states[e, 2] = z
+            self.low_bar_root_states[e, 3:7] = torch.tensor(
                 [0.0, 0.0, 0.0, 1.0], device=self.device)
-            self.root_states[e + self.num_envs, 7:13] = 0.0
-        bar_ids_int32 = bar_ids.to(dtype=torch.int32)
+            self.low_bar_root_states[e, 7:13] = 0.0
+        bar_ids_int32 = self.low_bar_actor_indices.index_select(
+            0, env_ids).to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(
-            self.sim, gymtorch.unwrap_tensor(self.root_states),
+            self.sim, gymtorch.unwrap_tensor(self.all_root_states),
             gymtorch.unwrap_tensor(bar_ids_int32), len(bar_ids_int32))
 
     def render(self, mode="rgb_array"):

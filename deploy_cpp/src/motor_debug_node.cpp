@@ -105,7 +105,8 @@ public:
 
       // Publish joint states for RViz
       if (visualizer_) {
-        visualizer_->publish_joint_states(motor_->dof_pos(), motor_->dof_vel());
+        visualizer_->publish_joint_states(motor_->dof_pos(), motor_->dof_vel(),
+                                          &motor_->dof_tau());
       }
 
       // Print current joint angles

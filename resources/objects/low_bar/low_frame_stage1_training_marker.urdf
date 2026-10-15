@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<!--
+  Collision-free visual marker for Stage-1 low-crawl pretraining.
+  The environment still evaluates the exact conceptual 0.36 x 1.10 x 0.40 m
+  envelope from robot collision AABBs.  Removing hard contact lets PPO learn
+  the crouched gait from dense shaping before returning to the physical frame.
+-->
+<robot name="robocon_2027_low_frame_stage1_training_marker">
+  <link name="low_frame">
+    <visual name="roof_vis">
+      <origin xyz="0.20 0 0"/>
+      <geometry><box size="0.40 1.20 0.05"/></geometry>
+      <material name="transparent_red"><color rgba="0.8 0.1 0.1 0.35"/></material>
+    </visual>
+    <visual name="entry_post_pos_y_vis"><origin xyz="0 0.575 -0.205"/><geometry><box size="0.05 0.05 0.36"/></geometry><material name="grey"><color rgba="0.6 0.6 0.6 0.35"/></material></visual>
+    <visual name="entry_post_neg_y_vis"><origin xyz="0 -0.575 -0.205"/><geometry><box size="0.05 0.05 0.36"/></geometry><material name="grey"/></visual>
+    <visual name="exit_post_pos_y_vis"><origin xyz="0.40 0.575 -0.205"/><geometry><box size="0.05 0.05 0.36"/></geometry><material name="grey"/></visual>
+    <visual name="exit_post_neg_y_vis"><origin xyz="0.40 -0.575 -0.205"/><geometry><box size="0.05 0.05 0.36"/></geometry><material name="grey"/></visual>
+  </link>
+</robot>

@@ -95,3 +95,9 @@ log/
 /robocon_reference/
 *.bak_robocon
 /ldl/
+
+# Local agent workspace
+/.opencode/
+
+/evaluations/robocon_2027/**/*.json
+/evaluations/robocon_2027/**/*.npz

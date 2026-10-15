@@ -33,6 +33,7 @@ NUM_HEIGHT_POINTS = 77
 HISTORY_LENGTH = 10
 POLICY_OBS_PER_STEP = 119
 ESTIMATOR_OBS_PER_STEP = 116
+OBSTACLE_AHEAD_OBS = 7
 MAX_STAIR_STEPS = 8
 THREE_STAIR_LANES = 5
 THREE_STAIR_STEPS = 10
@@ -175,6 +176,20 @@ def quat_projected_gravity(quat: np.ndarray) -> np.ndarray:
     return rotation.T @ np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
 
+def quat_rotate_inverse(quat: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    """Rotate a world-frame vector into the body frame."""
+    w, x, y, z = quat
+    rotation = np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float32,
+    )
+    return rotation.T @ np.asarray(vector, dtype=np.float32)
+
+
 class MybotV3Sim:
     def __init__(self, config: dict, body_path: Path, adaptation_path: Path,
                  terrain_mode: str, package_root: Path):
@@ -288,11 +303,12 @@ class MybotV3Sim:
         self.adaptation = torch.jit.load(
             str(adaptation_path), map_location="cpu"
         ).eval()
+        self._configure_model_observation_widths()
         self.policy_history = torch.zeros(
-            (HISTORY_LENGTH, POLICY_OBS_PER_STEP), dtype=torch.float32
+            (HISTORY_LENGTH, self.policy_obs_per_step), dtype=torch.float32
         )
         self.estimator_history = torch.zeros(
-            (HISTORY_LENGTH, ESTIMATOR_OBS_PER_STEP), dtype=torch.float32
+            (HISTORY_LENGTH, self.estimator_obs_per_step), dtype=torch.float32
         )
         self.last_actions = torch.zeros((1, NUM_JOINTS), dtype=torch.float32)
         self.infer_count = 0
@@ -317,22 +333,75 @@ class MybotV3Sim:
                 return value[0]
         raise RuntimeError(f"{name} must return a single tensor")
 
+    @staticmethod
+    def _first_linear_input_width(module: torch.jit.ScriptModule, name: str) -> int:
+        for parameter_name, value in module.state_dict().items():
+            if value.ndim == 2:
+                return int(value.shape[1])
+        raise RuntimeError(f"{name} contains no 2-D linear weight")
+
+    def _configure_model_observation_widths(self):
+        """Infer legacy (119/116) or low-frame (126/123) contracts from JIT."""
+        estimator_input = self._first_linear_input_width(
+            self.adaptation, "adaptation module"
+        )
+        if estimator_input % HISTORY_LENGTH:
+            raise RuntimeError(
+                f"adaptation input {estimator_input} is not divisible by history "
+                f"length {HISTORY_LENGTH}"
+            )
+        self.estimator_obs_per_step = estimator_input // HISTORY_LENGTH
+
+        with torch.inference_mode():
+            latent = self._tensor_output(
+                self.adaptation(torch.zeros((1, estimator_input))),
+                "adaptation module",
+            )
+        if latent.ndim != 2 or latent.shape[0] != 1:
+            raise RuntimeError(
+                f"adaptation module output must be [1, latent], got {tuple(latent.shape)}"
+            )
+        self.latent_dim = int(latent.shape[1])
+        body_input = self._first_linear_input_width(self.body, "body module")
+        policy_history_width = body_input - self.latent_dim
+        if policy_history_width <= 0 or policy_history_width % HISTORY_LENGTH:
+            raise RuntimeError(
+                f"body input {body_input} is incompatible with latent {self.latent_dim} "
+                f"and history length {HISTORY_LENGTH}"
+            )
+        self.policy_obs_per_step = policy_history_width // HISTORY_LENGTH
+
+        supported = {
+            (POLICY_OBS_PER_STEP, ESTIMATOR_OBS_PER_STEP),
+            (
+                POLICY_OBS_PER_STEP + OBSTACLE_AHEAD_OBS,
+                ESTIMATOR_OBS_PER_STEP + OBSTACLE_AHEAD_OBS,
+            ),
+        }
+        actual = (self.policy_obs_per_step, self.estimator_obs_per_step)
+        if actual not in supported:
+            raise RuntimeError(
+                f"unsupported policy/estimator observations per step: {actual}; "
+                f"supported={sorted(supported)}"
+            )
+
     def _validate_models(self):
         """Check the exported JIT interface before the first physics step."""
         with torch.inference_mode():
             estimator_history = torch.zeros(
-                (1, HISTORY_LENGTH * ESTIMATOR_OBS_PER_STEP), dtype=torch.float32
+                (1, HISTORY_LENGTH * self.estimator_obs_per_step), dtype=torch.float32
             )
             latent = self._tensor_output(
                 self.adaptation(estimator_history), "adaptation module"
             )
-            if tuple(latent.shape) != (1, 10):
+            if tuple(latent.shape) != (1, self.latent_dim):
                 raise RuntimeError(
-                    f"adaptation module output must be [1, 10], got {tuple(latent.shape)}"
+                    f"adaptation module output must be [1, {self.latent_dim}], "
+                    f"got {tuple(latent.shape)}"
                 )
 
             body_input = torch.zeros(
-                (1, HISTORY_LENGTH * POLICY_OBS_PER_STEP + 10),
+                (1, HISTORY_LENGTH * self.policy_obs_per_step + self.latent_dim),
                 dtype=torch.float32,
             )
             action = self._tensor_output(self.body(body_input), "body module")
@@ -546,6 +615,53 @@ class MybotV3Sim:
         ground_z = np.minimum(np.minimum(h1, h2), h3)
         return (base_z - ground_z).astype(np.float32).reshape(-1)
 
+    def obstacle_ahead_state(self) -> np.ndarray:
+        """Return the seven-field low-frame contract used by checkpoint 063296.
+
+        Required config values are provided by an obstacle scene or deployment
+        localizer.  Legacy checkpoints never call this method because their JIT
+        input width is inferred as 119/116 observations per step.
+        """
+        required = ("obstacle_ahead_x", "obstacle_ahead_y", "obstacle_clearance_m")
+        missing = [key for key in required if key not in self.config]
+        if missing:
+            raise RuntimeError(
+                "the loaded policy expects obstacle_ahead[7], but config is "
+                f"missing {missing}"
+            )
+        base = np.asarray(self.data.qpos[:3], dtype=np.float32)
+        quat = np.asarray(self.data.qpos[3:7], dtype=np.float32)
+        clearance = float(self.config["obstacle_clearance_m"])
+        thickness = float(self.config.get("obstacle_thickness_m", 0.05))
+        obstacle_world = np.array(
+            [
+                float(self.config["obstacle_ahead_x"]),
+                float(self.config["obstacle_ahead_y"]),
+                clearance + 0.5 * thickness,
+            ],
+            dtype=np.float32,
+        )
+        relative = quat_rotate_inverse(quat, obstacle_world - base)
+        w, x, y, z = quat
+        base_yaw = math.atan2(
+            2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)
+        )
+        gate_yaw = float(self.config.get("obstacle_heading_rad", 0.0))
+        heading_error = (gate_yaw - base_yaw + math.pi) % (2.0 * math.pi) - math.pi
+        valid = float(self.config.get("obstacle_ahead_valid", 1.0))
+        return np.array(
+            [
+                relative[0],
+                relative[1],
+                relative[2] - 0.5 * thickness,
+                math.sin(heading_error),
+                math.cos(heading_error),
+                clearance,
+                valid,
+            ],
+            dtype=np.float32,
+        )
+
     def _observations(self, command: np.ndarray):
         command = command.astype(np.float32).copy()
         if np.linalg.norm(command[:2]) < float(self.config["cmd_deadband"]):
@@ -567,12 +683,41 @@ class MybotV3Sim:
         )
         q_obs = (q - self.policy_dof_pos) * float(self.config["dof_pos_scale"])
         dq_obs = dq * float(self.config["dof_vel_scale"])
+        policy_parts = [
+            command_obs,
+            gravity,
+            q_obs,
+            dq_obs,
+            self.last_actions.numpy()[0],
+            height_obs,
+        ]
+        estimator_parts = [
+            gravity,
+            q_obs,
+            dq_obs,
+            self.last_actions.numpy()[0],
+            height_obs,
+        ]
+        if self.policy_obs_per_step == POLICY_OBS_PER_STEP + OBSTACLE_AHEAD_OBS:
+            obstacle_state = self.obstacle_ahead_state()
+            policy_parts.append(obstacle_state)
+            estimator_parts.append(obstacle_state)
         policy_step = np.concatenate(
-            [command_obs, gravity, q_obs, dq_obs, self.last_actions.numpy()[0], height_obs]
+            policy_parts
         )
         estimator_step = np.concatenate(
-            [gravity, q_obs, dq_obs, self.last_actions.numpy()[0], height_obs]
+            estimator_parts
         )
+        if policy_step.size != self.policy_obs_per_step:
+            raise RuntimeError(
+                f"policy observation width {policy_step.size} != model width "
+                f"{self.policy_obs_per_step}"
+            )
+        if estimator_step.size != self.estimator_obs_per_step:
+            raise RuntimeError(
+                f"estimator observation width {estimator_step.size} != model width "
+                f"{self.estimator_obs_per_step}"
+            )
         policy_step = np.clip(policy_step, -float(self.config["clip_obs"]), float(self.config["clip_obs"]))
         estimator_step = np.clip(estimator_step, -float(self.config["clip_obs"]), float(self.config["clip_obs"]))
         return (

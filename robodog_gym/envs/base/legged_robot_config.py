@@ -132,18 +132,31 @@ class Cfg(PrefixProto, cli=False):
 
         # ---- ROBOCON low-bar (限高杆 / 矮门) obstacle ----
         # A real collision geometry placed inside each terrain tile (flat
-        # ground + one fixed-base actor holding cross-bar + two posts).  The
+        # ground + one fixed-base actor holding the complete frame).  The
         # bar cannot be represented by the 2.5D heightfield, so it is a
         # separate Isaac Gym actor, not a height-field modification.
         robocon_low_bar = False          # enable low-bar actors in every env
-        low_bar_clearance_min = 0.25     # [m] hardest row (lowest bar)
-        low_bar_clearance_max = 0.35     # [m] easiest row (highest bar)
-        low_bar_target_clearance = 0.30  # [m] ROBOCON competition spec
-        low_bar_width = 1.0              # [m] cross-bar length along y
+        low_bar_clearance_min = 0.29     # [m] competition inner height
+        low_bar_clearance_max = 0.36     # [m] first curriculum height
+        low_bar_target_clearance = 0.29  # [m] ROBOCON competition spec
+        low_bar_width = 0.80             # [m] inner opening along y
+        low_bar_length = 0.80            # [m] frame/tunnel length along x
         low_bar_thickness = 0.05         # [m] cross-bar / post cross-section
-        low_bar_x = 2.0                  # [m] forward distance from spawn to bar
-        low_bar_asset_path = '{MINI_GYM_ROOT_DIR}/resources/objects/low_bar/low_bar.urdf'
+        low_bar_x = 2.0                  # [m] spawn to frame entrance
+        low_bar_asset_path = '{MINI_GYM_ROOT_DIR}/resources/objects/low_bar/low_frame_2027.urdf'
         robocon_low_bar_clearance_by_level = None  # optional per-row table
+        low_bar_external_evaluator = False  # evaluator owns task termination
+        low_bar_pretrain = False  # dense crawl pretraining; no envelope reset
+        low_bar_envelope_tolerance = 0.005  # [m] geometry/rule tolerance
+        low_bar_contact_force_threshold = 1.0  # [N] record light contact
+        # Provisional until calibrated against the physical frame.  Contacts
+        # below this threshold are logged but are not rule failures.
+        low_bar_excessive_force_threshold = 250.0  # [N]
+        # Mesh-verified crouch target (MuJoCo M0 scan: total height ~269 mm).
+        low_bar_crouch_target_hip = 0.10
+        low_bar_crouch_target_thigh = 1.60
+        low_bar_crouch_target_calf = -2.15
+        low_bar_crouch_target_sigma = 0.65
 
         # height_measurements params. Should be put in a separate class
         measure_heights = True
@@ -269,6 +282,11 @@ class Cfg(PrefixProto, cli=False):
         rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
+        # Episode reset perturbations.  Defaults preserve the historical
+        # training distribution; deterministic evaluators can explicitly set
+        # [1, 1] and 0 without changing the training contract.
+        dof_pos_scale_range = [0.5, 1.5]
+        base_velocity_half_range = 0.5
         # target angles when action = 0.0
         default_joint_angles = {"joint_a": 0., "joint_b": 0.}
 
@@ -438,6 +456,19 @@ class Cfg(PrefixProto, cli=False):
         dof_pos_stancemode = 0.0
 
         torque_limits = 0.0
+
+        # ROBOCON 2027 low-frame task (enabled by the dedicated trainer).
+        low_bar_crouch = 0.0
+        low_bar_body_top = 0.0
+        low_bar_inside_progress = 0.0
+        low_bar_early_recover = 0.0
+        low_bar_recover = 0.0
+        low_bar_crossing_speed = 0.0
+        low_bar_alignment = 0.0
+        low_bar_pass = 0.0
+        low_bar_success = 0.0
+        low_bar_collision = 0.0
+        low_bar_missed_gate = 0.0
 
     class normalization(PrefixProto, cli=False):
         clip_observations = 100.

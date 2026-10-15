@@ -46,6 +46,7 @@ import torch
 
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT)
 sys.path.insert(0, os.path.join(PROJECT, "scripts"))
 
 from play_teleop import load_config  # noqa: E402
@@ -58,27 +59,49 @@ from robodog_gym_learn.ppo_cse.checkpoint_utils import (  # noqa: E402
 )
 
 
+DOMAIN_RANDOMIZATION_FLAGS = (
+    "push_robots",
+    "randomize_gravity",
+    "randomize_restitution",
+    "randomize_motor_offset",
+    "randomize_motor_strength",
+    "randomize_friction_indep",
+    "randomize_ground_friction",
+    "randomize_base_mass",
+    "randomize_Kd_factor",
+    "randomize_Kp_factor",
+    "randomize_joint_friction",
+    "randomize_joint_damping",
+    "randomize_joint_armature",
+    "randomize_com_displacement",
+    "randomize_friction",
+    "randomize_lag_timesteps",
+)
+HEIGHT_NOISE_FLAGS = (
+    "height_measurements_per_step_xy_noise_std",
+    "height_measurements_per_step_z_noise_std",
+    "height_measurements_per_env_xy_noise_std",
+    "height_measurements_per_env_z_noise_std",
+    "height_measurements_per_env_noise_prob",
+)
+
+
 def _disable_domain_randomization(cfg):
-    for name in (
-        "push_robots",
-        "randomize_gravity",
-        "randomize_restitution",
-        "randomize_motor_offset",
-        "randomize_motor_strength",
-        "randomize_friction_indep",
-        "randomize_ground_friction",
-        "randomize_base_mass",
-        "randomize_Kd_factor",
-        "randomize_Kp_factor",
-        "randomize_joint_friction",
-        "randomize_joint_damping",
-        "randomize_joint_armature",
-        "randomize_com_displacement",
-        "randomize_friction",
-        "randomize_lag_timesteps",
-    ):
+    for name in DOMAIN_RANDOMIZATION_FLAGS:
         if hasattr(cfg.domain_rand, name):
             setattr(cfg.domain_rand, name, False)
+
+
+def _set_joint_passive_damping(props, dof_names, values):
+    """Set Isaac DOF passive damping; this does not change the PD controller's Kd."""
+    for index, name in enumerate(dof_names):
+        lower_name = str(name).lower()
+        kind = next((kind for kind in ("hip", "thigh", "calf")
+                     if kind in lower_name), None)
+        if kind is None:
+            raise ValueError(f"Unknown low-frame DOF kind: {name}")
+        props["damping"][index] = values[kind]
+    return props
 
 
 def _roll_pitch(quat):
@@ -104,6 +127,8 @@ RATE_FIELDS = (
     ("recovered", "recovery_rate_percent"),
     ("crossed_outside_gate", "outside_gate_rate_percent"),
     ("collision", "collision_rate_percent"),
+    ("violent_collision", "violent_collision_rate_percent"),
+    ("envelope_violation", "envelope_violation_rate_percent"),
     ("fell", "fall_rate_percent"),
 )
 
@@ -143,6 +168,9 @@ def _summarize(records):
         [item["max_bar_force_n"] for item in records])) if records else 0.0, 3)
     block["mean_min_base_height_m"] = round(float(np.mean(
         [item["min_base_height_m"] for item in records])) if records else 0.0, 4)
+    block["mean_max_gate_lateral_extent_m"] = round(float(np.mean(
+        [item["max_gate_lateral_extent_m"] for item in records]))
+        if records else 0.0, 4)
     return block
 
 
@@ -306,10 +334,52 @@ def _evaluate(env, model, args, seed, traces=None):
     base_env.terrain_levels[:] = rows
     base_env.env_origins[:] = base_env.terrain_origins[rows, base_env.terrain_types]
     obs = env.reset()
+    initial_trace_count = min(int(getattr(args, "trace_envs", 0) or 0), num_envs)
+    initial_foot_normal_force = (
+        base_env.contact_forces[:initial_trace_count]
+        .index_select(1, base_env.feet_indices)[:, :, 2]
+        .cpu().numpy().astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_base_quat = (
+        base_env.base_quat[:initial_trace_count].cpu().numpy()
+        .astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_base_z = (
+        base_env.base_pos[:initial_trace_count, 2].cpu().numpy()
+        .astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_foot_center_z = (
+        base_env.rigid_body_state[:initial_trace_count]
+        .index_select(1, base_env.feet_indices)[:, :, 2]
+        .cpu().numpy().astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_base_lin_vel = (
+        base_env.root_states[:initial_trace_count, 7:10]
+        .cpu().numpy().astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_base_ang_vel = (
+        base_env.root_states[:initial_trace_count, 10:13]
+        .cpu().numpy().astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_joint_pos = (
+        base_env.dof_pos[:initial_trace_count]
+        .cpu().numpy().astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_joint_vel = (
+        base_env.dof_vel[:initial_trace_count]
+        .cpu().numpy().astype(np.float32).copy()
+        if traces is not None and initial_trace_count > 0 else None)
+    initial_policy_obs = (
+        obs["policy_obs"][:1].detach().cpu().numpy().copy()
+        if traces is not None else None)
+    initial_estimator_obs = (
+        obs["estimator_obs"][:1].detach().cpu().numpy().copy()
+        if traces is not None else None)
 
-    # Query simulator-domain indices instead of relying on actor creation
-    # order. Isaac Gym warns when actors are appended to earlier envs, and a
-    # wrong contiguous slice can silently report robot contacts as bar hits.
+    # Query simulator-domain indices and assert the supported in-order layout:
+    # [robot0 bodies, bar0, robot1 bodies, bar1, ...].  Isaac Gym requires all
+    # actors in an environment before creating the next environment; the old
+    # two-pass actor creation violated that contract and yielded false passes.
     all_contact_forces = gymtorch.wrap_tensor(
         base_env.gym.acquire_net_contact_force_tensor(base_env.sim))
     bar_body_indices = torch.as_tensor([
@@ -324,22 +394,23 @@ def _evaluate(env, model, args, seed, traces=None):
             gymapi.DOMAIN_SIM)
         for i in range(num_envs)
     ]
-    expected_robot_bases = [i * base_env.num_bodies for i in range(num_envs)]
+    bodies_per_env = base_env.num_bodies + 1
+    expected_robot_bases = [i * bodies_per_env for i in range(num_envs)]
     if robot_base_indices != expected_robot_bases:
         raise RuntimeError(
-            "Robot rigid bodies are not contiguous in the order assumed by "
-            "LeggedRobot.rigid_body_state")
-    expected_bar_start = num_envs * base_env.num_bodies
-    expected_bar_indices = torch.arange(
-        expected_bar_start, expected_bar_start + num_envs,
-        device=device, dtype=torch.long)
+            "Unexpected interleaved robot rigid-body layout")
+    expected_bar_indices = (
+        torch.arange(num_envs, device=device, dtype=torch.long)
+        * bodies_per_env + base_env.num_bodies)
     print(
         "bar rigid-body indices:",
-        f"actual=[{int(bar_body_indices[0])}..{int(bar_body_indices[-1])}]",
-        f"expected=[{expected_bar_start}..{expected_bar_start + num_envs - 1}]",
-        f"contiguous={bool(torch.equal(bar_body_indices, expected_bar_indices))}",
+        f"actual={bar_body_indices[:min(4, num_envs)].tolist()}...",
+        f"expected={expected_bar_indices[:min(4, num_envs)].tolist()}...",
+        f"layout_ok={bool(torch.equal(bar_body_indices, expected_bar_indices))}",
         flush=True,
     )
+    if not torch.equal(bar_body_indices, expected_bar_indices):
+        raise RuntimeError("Unexpected interleaved low-bar rigid-body layout")
 
     bar_x = base_env.env_origins[:, 0] + float(Cfg.terrain.low_bar_x)
     clearance_table = torch.as_tensor(
@@ -348,25 +419,70 @@ def _evaluate(env, model, args, seed, traces=None):
         dtype=torch.float32,
     )
     clearances = clearance_table[rows]
+    bar_body_state = base_env.all_rigid_body_state.index_select(
+        0, bar_body_indices)
+    expected_bar_z = clearances + 0.5 * float(Cfg.terrain.low_bar_thickness)
+    bar_pose_error = torch.stack([
+        bar_body_state[:, 0] - bar_x,
+        bar_body_state[:, 1] - base_env.env_origins[:, 1],
+        bar_body_state[:, 2] - expected_bar_z,
+    ], dim=1)
+    print(
+        "bar pose audit:",
+        f"actual_xyz={bar_body_state[:min(4, num_envs), :3].tolist()}",
+        f"expected_xz={torch.stack((bar_x, expected_bar_z), dim=1)[:min(4, num_envs)].tolist()}",
+        f"max_abs_error_m={float(bar_pose_error.abs().max()):.6f}",
+        flush=True,
+    )
 
     active = torch.ones(num_envs, dtype=torch.bool, device=device)
     fell = torch.zeros_like(active)
     collision = torch.zeros_like(active)
+    violent_collision = torch.zeros_like(active)
+    envelope_violation = torch.zeros_like(active)
     passed = torch.zeros_like(active)
     crossed_gate_plane = torch.zeros_like(active)
     crossed_outside_gate = torch.zeros_like(active)
     recovered = torch.zeros_like(active)
+    success_latched = torch.zeros_like(active)
     stable_steps = torch.zeros(num_envs, dtype=torch.long, device=device)
     max_bar_force = torch.zeros(num_envs, device=device)
     min_base_height = torch.full((num_envs,), float("inf"), device=device)
     max_abs_roll_pitch = torch.zeros(num_envs, device=device)
+    max_gate_lateral_extent = torch.zeros(num_envs, device=device)
     start_x = base_env.base_pos[:, 0].clone()
+
+    # Diagnostic only: superimpose a mesh-verified symmetric crouch residual
+    # on the existing locomotion policy.  This separates action/control
+    # feasibility from PPO exploration.  A scale of zero is the normal
+    # deployment evaluator and remains the default.
+    crouch_residual = torch.zeros(
+        (1, base_env.num_actions), dtype=torch.float32, device=device)
+    if args.scripted_crouch_scale > 0.0:
+        action_scale = float(Cfg.control.action_scale)
+        defaults = Cfg.init_state.default_joint_angles
+        for index, name in enumerate(base_env.dof_names):
+            lname = str(name).lower()
+            if 'hip' in lname:
+                target = 0.10 if lname.startswith(('fl', 'rl')) else -0.10
+            elif 'thigh' in lname:
+                target = 1.60
+            elif 'calf' in lname:
+                target = -2.15
+            else:
+                target = float(defaults[name])
+            crouch_residual[0, index] = (
+                target - float(defaults[name])) / action_scale
 
     # Optional per-step trace for the first few environments.  Used by
     # scripts/analyze_low_bar_trace.py to locate the bar contact in time and to
     # check whether the robot lowers its body at all before the bar.
     trace_count = min(int(getattr(args, "trace_envs", 0) or 0), num_envs)
     trace_rows = [] if (traces is not None and trace_count > 0) else None
+    dynamics_rows = [] if trace_rows is not None else None
+    base_quat_rows = [] if trace_rows is not None else None
+    foot_normal_force_rows = [] if trace_rows is not None else None
+    foot_center_z_rows = [] if trace_rows is not None else None
     termination_events = [] if trace_rows is not None else None
     contact_snapshots = [] if trace_rows is not None else None
     seen_bar_hits = torch.zeros(num_envs, dtype=torch.bool, device=device)
@@ -381,6 +497,28 @@ def _evaluate(env, model, args, seed, traces=None):
         with torch.inference_mode():
             latent = model.adaptation_module(obs["estimator_obs"])
             action = model.actor_body(torch.cat((obs["policy_obs"], latent), dim=-1))
+            if args.scripted_crouch_scale > 0.0:
+                # Fully crouched before the robot's front reaches the frame;
+                # keep the residual until its rear has cleared, then recover.
+                x = base_env.base_pos[:, 0]
+                ramp_in = torch.clamp(
+                    (x - (bar_x - args.scripted_crouch_window))
+                    / max(args.scripted_crouch_window - 0.40, 1e-6),
+                    0.0, 1.0)
+                recover_start = (
+                    bar_x + float(Cfg.terrain.low_bar_length) + 0.35)
+                ramp_out = torch.clamp(
+                    (recover_start + 0.35 - x) / 0.35, 0.0, 1.0)
+                phase = torch.minimum(ramp_in, ramp_out).unsqueeze(1)
+                strength = torch.full_like(
+                    x, float(args.scripted_crouch_scale))
+                if args.scripted_crouch_height_target is not None:
+                    strength = strength + args.scripted_crouch_height_gain * (
+                        base_env.base_pos[:, 2]
+                        - args.scripted_crouch_height_target)
+                    strength = torch.clamp(strength, min=0.0, max=1.25)
+                action = action + (
+                    strength.unsqueeze(1) * phase * crouch_residual)
             if args.action_noise_std > 0.0:
                 action = action + torch.randn_like(action) * args.action_noise_std
         obs, _, done, _ = env.step(action)
@@ -391,6 +529,9 @@ def _evaluate(env, model, args, seed, traces=None):
         collision_this_step = active & (
             current_force > args.contact_force_threshold)
         collision |= collision_this_step
+        violent_collision_this_step = active & (
+            current_force > args.violent_contact_force_threshold)
+        violent_collision |= violent_collision_this_step
 
         # Snapshot the whole robot the first time the bar is touched.  This
         # frame is valid because it is read before the environment can reset.
@@ -406,29 +547,56 @@ def _evaluate(env, model, args, seed, traces=None):
                     ).cpu().numpy(),
                     "base_z": base_env.base_pos[hit_index, 2].cpu().numpy(),
                     "x_rel": (
-                        base_env.rigid_body_state.view(
-                            num_envs, base_env.num_bodies, 13
-                        )[hit_index, :, 0] - bar_x[hit_index].unsqueeze(1)
+                        base_env.rigid_body_state[hit_index, :, 0]
+                        - bar_x[hit_index].unsqueeze(1)
                     ).cpu().numpy(),
-                    "body_z": base_env.rigid_body_state.view(
-                        num_envs, base_env.num_bodies, 13
-                    )[hit_index, :, 2].cpu().numpy(),
+                    "body_z": base_env.rigid_body_state[
+                        hit_index, :, 2].cpu().numpy(),
                     "clearance": clearances[hit_index].cpu().numpy(),
                     "bar_force_n": current_force[hit_index].cpu().numpy(),
                 })
             seen_bar_hits |= collision_this_step
 
-        # rigid_body_state is deliberately the contiguous robot-only slice.
-        robot_bodies = base_env.rigid_body_state.view(
-            num_envs, base_env.num_bodies, 13)
+        robot_bodies = base_env.rigid_body_state
+        collision_lower, collision_upper, collision_valid = (
+            base_env.low_bar_collision_bounds())
+        collision_top_by_body = torch.where(
+            collision_valid.unsqueeze(0),
+            collision_upper[:, :, 2],
+            torch.full_like(collision_upper[:, :, 2], float('-inf')),
+        )
+        collision_top, collision_top_body = collision_top_by_body.max(dim=1)
         if trace_rows is not None:
             trace_rows.append(np.stack([
                 base_env.base_pos[:trace_count, 0].cpu().numpy(),
+                base_env.base_pos[:trace_count, 1].cpu().numpy(),
                 base_env.base_pos[:trace_count, 2].cpu().numpy(),
-                robot_bodies[:trace_count, :, 2].amax(dim=1).cpu().numpy(),
+                collision_top[:trace_count].cpu().numpy(),
+                collision_top_body[:trace_count].float().cpu().numpy(),
                 current_force[:trace_count].cpu().numpy(),
                 action[:trace_count].abs().amax(dim=1).cpu().numpy(),
                 active[:trace_count].float().cpu().numpy(),
+            ], axis=-1).astype(np.float32))
+            # Base quaternion uses Isaac Gym xyzw order.  Capture foot net
+            # contact force along world +z in the asset body order.  These
+            # channels let paired traces locate the first contact divergence.
+            base_quat_rows.append(
+                base_env.base_quat[:trace_count].cpu().numpy().astype(np.float32))
+            foot_normal_force_rows.append(
+                base_env.contact_forces[:trace_count]
+                .index_select(1, base_env.feet_indices)[:, :, 2]
+                .cpu().numpy().astype(np.float32))
+            foot_center_z_rows.append(
+                base_env.rigid_body_state[:trace_count]
+                .index_select(1, base_env.feet_indices)[:, :, 2]
+                .cpu().numpy().astype(np.float32))
+            # Per-step joint dynamics for paired pre-contact sim-to-sim audits.
+            # The Isaac torque sample is the final physics substep of env.step.
+            dynamics_rows.append(np.stack([
+                base_env.dof_pos[:trace_count].cpu().numpy(),
+                base_env.dof_vel[:trace_count].cpu().numpy(),
+                base_env.joint_pos_target[:trace_count].cpu().numpy(),
+                base_env.torques[:trace_count].cpu().numpy(),
             ], axis=-1).astype(np.float32))
             # Which robot body actually touched the bar?  env.step() has already
             # reset a terminated environment, so the contact forces still belong
@@ -438,8 +606,7 @@ def _evaluate(env, model, args, seed, traces=None):
             if newly_done.any():
                 env_index = newly_done.nonzero().flatten()
                 robot_contact = torch.linalg.vector_norm(
-                    all_contact_forces[: num_envs * base_env.num_bodies].view(
-                        num_envs, base_env.num_bodies, 3), dim=-1)
+                    base_env.contact_forces, dim=-1)
                 events = {
                     "step": step_index,
                     "env": env_index.cpu().numpy(),
@@ -453,21 +620,65 @@ def _evaluate(env, model, args, seed, traces=None):
                 termination_events.append(events)
             prev_body_x = robot_bodies[:trace_count, :, 0].clone()
             prev_body_z = robot_bodies[:trace_count, :, 2].clone()
-        whole_robot_x = robot_bodies[:, :, 0].amin(dim=1)
-        body_lateral_extent = (
-            robot_bodies[:, :, 1] - base_env.env_origins[:, 1].unsqueeze(1)
-        ).abs().amax(dim=1)
+        valid = collision_valid.unsqueeze(0)
+        whole_robot_x = torch.where(
+            valid,
+            collision_lower[:, :, 0],
+            torch.full_like(collision_lower[:, :, 0], float('inf')),
+        ).amin(dim=1)
+        origin_y = base_env.env_origins[:, 1].unsqueeze(1)
+        lateral_extent = torch.maximum(
+            (collision_lower[:, :, 1] - origin_y).abs(),
+            (collision_upper[:, :, 1] - origin_y).abs(),
+        )
+        lateral_extent = torch.where(
+            valid, lateral_extent, torch.zeros_like(lateral_extent))
+        body_lateral_extent = lateral_extent.amax(dim=1)
         opening_half_width = (
             0.5 * float(Cfg.terrain.low_bar_width)
-            - float(Cfg.terrain.low_bar_thickness)
             - args.gate_margin
         )
-        crossed_plane = active & (whole_robot_x > bar_x + args.pass_margin)
+        frame_length = float(getattr(Cfg.terrain, "low_bar_length", 0.0))
+        envelope_tolerance = float(getattr(
+            Cfg.terrain, "low_bar_envelope_tolerance", 0.005))
+        overlaps_tunnel = (
+            valid
+            & (collision_upper[:, :, 0] >= bar_x.unsqueeze(1))
+            & (collision_lower[:, :, 0]
+               <= bar_x.unsqueeze(1) + frame_length)
+        )
+        envelope_violation_this_step = (
+            active
+            & (overlaps_tunnel
+               & (collision_upper[:, :, 2]
+                  > clearances.unsqueeze(1) + envelope_tolerance)).any(dim=1)
+        )
+        envelope_violation |= envelope_violation_this_step
+        crossed_plane = active & (
+            whole_robot_x > bar_x + frame_length + args.pass_margin)
         first_crossing = crossed_plane & ~crossed_gate_plane
         inside_gate = body_lateral_extent < opening_half_width
-        missed_gate_this_step = first_crossing & ~inside_gate
+        # Alignment is evaluated during approach, but bypass becomes a rule
+        # failure only once some collision geometry overlaps the tunnel.
+        near_frame = (
+            valid
+            & (collision_upper[:, :, 0] >= bar_x.unsqueeze(1))
+            & (collision_lower[:, :, 0]
+               <= bar_x.unsqueeze(1) + frame_length)
+        )
+        gate_lateral_extent = torch.where(
+            near_frame, lateral_extent,
+            torch.zeros_like(lateral_extent)).amax(dim=1)
+        max_gate_lateral_extent = torch.maximum(
+            max_gate_lateral_extent, gate_lateral_extent)
+        bypassed_this_step = (
+            active & near_frame.any(dim=1)
+            & (gate_lateral_extent >= opening_half_width)
+        )
+        missed_gate_this_step = (
+            bypassed_this_step | (first_crossing & ~inside_gate))
         crossed_outside_gate |= missed_gate_this_step
-        just_passed = first_crossing & inside_gate
+        just_passed = first_crossing & inside_gate & ~crossed_outside_gate
         crossed_gate_plane |= first_crossing
         passed |= just_passed
 
@@ -488,11 +699,26 @@ def _evaluate(env, model, args, seed, traces=None):
         # Low-bar collisions and missed-gate events intentionally terminate
         # episodes and are included in early_termi_buf. They are task failures,
         # not physical falls, so keep the categories mutually meaningful.
-        task_failure_this_step = collision_this_step | missed_gate_this_step
+        task_failure_this_step = (
+            violent_collision_this_step | envelope_violation_this_step
+            | missed_gate_this_step)
         fell |= active & early & ~task_failure_this_step
-        active &= ~done.bool()
+        active &= ~done.bool() & ~task_failure_this_step
 
-    success = passed & recovered & ~collision & ~fell
+        # The attempt is complete once the robot has cleared the frame and
+        # remained stable for the requested recovery window.  Evaluation keeps
+        # the simulator running so all candidates get the same wall-clock
+        # horizon, but events after that completion point belong to subsequent
+        # free locomotion and must not retroactively invalidate the obstacle.
+        # Freeze the attempt here, matching the training environment's
+        # terminate-on-success contract and the rule-level event ledger.
+        success_this_step = (
+            active & passed & recovered & ~violent_collision
+            & ~envelope_violation & ~fell)
+        success_latched |= success_this_step
+        active &= ~success_this_step
+
+    success = success_latched
     distance = base_env.base_pos[:, 0] - start_x
 
     records = []
@@ -507,10 +733,14 @@ def _evaluate(env, model, args, seed, traces=None):
             "recovered": bool(recovered[i].item()),
             "crossed_outside_gate": bool(crossed_outside_gate[i].item()),
             "collision": bool(collision[i].item()),
+            "violent_collision": bool(violent_collision[i].item()),
+            "envelope_violation": bool(envelope_violation[i].item()),
             "fell": bool(fell[i].item()),
             "max_bar_force_n": float(max_bar_force[i].item()),
             "min_base_height_m": float(min_base_height[i].item()),
             "max_abs_roll_pitch_rad": float(max_abs_roll_pitch[i].item()),
+            "max_gate_lateral_extent_m": float(
+                max_gate_lateral_extent[i].item()),
             "final_displacement_x_m": float(distance[i].item()),
         })
 
@@ -521,14 +751,37 @@ def _evaluate(env, model, args, seed, traces=None):
         records, float(Cfg.terrain.low_bar_target_clearance))
     if trace_rows is not None:
         traces[(seed, trace_count)] = {
-            "trace": np.stack(trace_rows),          # (steps, envs, 5)
+            "trace": np.stack(trace_rows),          # (steps, envs, fields)
+            "joint_dynamics": np.stack(dynamics_rows),  # (steps, envs, joints, fields)
+            "base_quat_xyzw": np.stack(base_quat_rows),  # (steps, envs, 4)
+            "initial_base_quat_xyzw": initial_base_quat,
+            "initial_base_z_m": initial_base_z,
+            "initial_foot_normal_force_n": initial_foot_normal_force,
+            "initial_foot_center_z_m": initial_foot_center_z,
+            "initial_base_lin_vel_m_s": initial_base_lin_vel,
+            "initial_base_ang_vel_rad_s": initial_base_ang_vel,
+            "initial_joint_pos_rad": initial_joint_pos,
+            "initial_joint_vel_rad_s": initial_joint_vel,
+            "foot_center_z_m": np.stack(foot_center_z_rows),
+            "foot_normal_force_n": np.stack(foot_normal_force_rows),  # (steps, envs, feet)
+            "foot_names": np.array([
+                base_env.body_names[int(index)]
+                for index in base_env.feet_indices.cpu().tolist()]),
+            "joint_dynamics_fields": np.array([
+                "joint_pos_rad", "joint_vel_rad_s",
+                "pd_target_rad", "last_substep_torque_nm"]),
+            "joint_names": np.array(base_env.dof_names),
+            "initial_policy_obs": initial_policy_obs,
+            "initial_estimator_obs": initial_estimator_obs,
             "bar_x": bar_x[:trace_count].cpu().numpy(),
             "clearance_m": clearances[:trace_count].cpu().numpy(),
             "rows": rows[:trace_count].cpu().numpy(),
             # np.savez cannot store a list of dicts portably, so keep the
             # per-env outcome records as JSON text.
             "records_json": json.dumps(records[:trace_count]),
-            "fields": np.array(["base_x", "base_z", "max_body_z",
+            "fields": np.array(["base_x", "base_y", "base_z",
+                                "max_collision_top_z",
+                                "max_collision_top_body_index",
                                 "bar_force_n", "action_absmax", "active"]),
             "body_names": np.array(base_env.gym.get_actor_rigid_body_names(
                 base_env.envs[0], base_env.actor_handles[0])),
@@ -563,6 +816,20 @@ def main():
         help=("nominal disables pose/sensor/dynamics randomization; "
               "train-matched preserves the randomization saved by the run"),
     )
+    parser.add_argument(
+        "--only-randomization", nargs="+", default=None,
+        choices=("joint-init", "base-velocity", "observation-noise",
+                 "height-noise", "dynamics"),
+        help=("Ablation: start from nominal and restore only these saved "
+              "train-matched randomizations. Omit to preserve --profile "
+              "behavior; lateral/yaw overrides still apply afterward."),
+    )
+    parser.add_argument(
+        "--joint-passive-damping", nargs=3, type=float,
+        metavar=("HIP", "THIGH", "CALF"), default=None,
+        help=("Override Isaac DOF passive damping in N m s/rad at actor "
+              "creation; leaves controller PD damping unchanged."),
+    )
     parser.add_argument("--seed", type=int, default=7,
                         help="Single held-out seed, reused for every candidate.")
     parser.add_argument(
@@ -588,11 +855,68 @@ def main():
     parser.add_argument("--recovery-s", type=float, default=1.0)
     parser.add_argument("--vx", type=float, default=0.5)
     parser.add_argument(
+        "--bar-x", type=float, default=None,
+        help="Optional low-bar forward offset override for physics diagnosis.",
+    )
+    parser.add_argument(
+        "--competition-spec", action="store_true",
+        help=("Override the legacy run geometry with the 2027 full frame: "
+              "0.29 m high, 0.80 m inner width and 0.80 m length."),
+    )
+    parser.add_argument(
+        "--low-bar-stage", type=int, choices=[1, 2, 3, 4], default=None,
+        help=("Evaluate an exact planned geometry stage: "
+              "1=0.36x1.10x0.40, 2=0.32x0.90x0.80, "
+              "3=0.29x0.80x0.80, 4=0.2755x0.76x0.84 m."),
+    )
+    parser.add_argument(
+        "--clearance", type=float, default=None,
+        help=("Evaluate one fixed inner height in metres.  Applied after "
+              "--competition-spec so curriculum stages such as 0.36 m can "
+              "use the same 2027 full-frame geometry."),
+    )
+    parser.add_argument(
         "--action-noise-std", type=float, default=0.0,
         help=("Optional Gaussian action noise for diagnosing the stochastic "
               "training rollout; deployment evaluation should keep this at 0."),
     )
+    parser.add_argument(
+        "--scripted-crouch-scale", type=float, default=0.0,
+        help=("Diagnostic residual strength added to the policy during the "
+              "approach/tunnel phase; 0 is the unmodified deployed policy."),
+    )
+    parser.add_argument(
+        "--scripted-crouch-window", type=float, default=0.80,
+        help="Distance before the entrance at which the diagnostic crouch ramps in.",
+    )
+    parser.add_argument(
+        "--scripted-crouch-height-target", type=float, default=None,
+        help=("Optional diagnostic base-height feedback target in metres; "
+              "used only when --scripted-crouch-scale is positive."),
+    )
+    parser.add_argument(
+        "--scripted-crouch-height-gain", type=float, default=0.0,
+        help="Gain applied to base height error in the diagnostic residual.",
+    )
+    parser.add_argument(
+        "--action-clip-override", type=float, default=None,
+        help=("Diagnostic override for the environment action clip.  Omit for "
+              "the checkpoint/run configuration used in deployment."),
+    )
+    parser.add_argument(
+        "--crouch-control-center", action="store_true",
+        help=("Diagnostic: recenter zero action and reset pose on the "
+              "mesh-verified low-crawl joint posture."),
+    )
+    parser.add_argument("--crouch-center-thigh", type=float, default=1.60)
+    parser.add_argument("--crouch-center-calf", type=float, default=-2.15)
+    parser.add_argument("--crouch-center-base-z", type=float, default=0.19)
     parser.add_argument("--contact-force-threshold", type=float, default=1.0)
+    parser.add_argument(
+        "--violent-contact-force-threshold", type=float, default=250.0,
+        help=("Provisional impact threshold used only for the rule proxy; "
+              "all lighter contacts are still recorded."),
+    )
     parser.add_argument("--pass-margin", type=float, default=0.05)
     parser.add_argument("--gate-margin", type=float, default=0.02)
     parser.add_argument("--stable-roll-pitch", type=float, default=0.6)
@@ -616,12 +940,42 @@ def main():
     )
     parser.add_argument("--out")
     args = parser.parse_args()
+    if args.joint_passive_damping is not None and not all(
+            math.isfinite(value) and value >= 0.0
+            for value in args.joint_passive_damping):
+        parser.error("--joint-passive-damping values must be finite and non-negative")
     if args.action_noise_std < 0.0:
         parser.error("--action-noise-std must be non-negative")
+    if args.scripted_crouch_scale < 0.0:
+        parser.error("--scripted-crouch-scale must be non-negative")
+    if args.scripted_crouch_window <= 0.40:
+        parser.error("--scripted-crouch-window must be greater than 0.40 m")
+    if args.scripted_crouch_height_gain < 0.0:
+        parser.error("--scripted-crouch-height-gain must be non-negative")
+    if args.action_clip_override is not None and args.action_clip_override <= 0.0:
+        parser.error("--action-clip-override must be positive")
+    if args.violent_contact_force_threshold < args.contact_force_threshold:
+        parser.error(
+            "--violent-contact-force-threshold must be >= "
+            "--contact-force-threshold")
+    if args.clearance is not None and args.clearance <= 0.0:
+        parser.error("--clearance must be positive")
+    if args.competition_spec and args.low_bar_stage is not None:
+        parser.error("--competition-spec and --low-bar-stage are mutually exclusive")
 
     with open(os.path.join(args.run, "parameters.pkl"), "rb") as handle:
         cfg_dict = pkl.load(handle)["Cfg"]
     load_config(cfg_dict, Cfg)
+    saved_randomization = {
+        "joint_init": list(Cfg.init_state.dof_pos_scale_range),
+        "base_velocity": float(Cfg.init_state.base_velocity_half_range),
+        "observation_noise": bool(Cfg.noise.add_noise),
+        "height_noise": {name: getattr(Cfg.terrain, name)
+                         for name in HEIGHT_NOISE_FLAGS if hasattr(Cfg.terrain, name)},
+        "dynamics": {name: getattr(Cfg.domain_rand, name)
+                     for name in DOMAIN_RANDOMIZATION_FLAGS
+                     if hasattr(Cfg.domain_rand, name)},
+    }
     np.random.seed(args.seed)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -640,31 +994,107 @@ def main():
     Cfg.terrain.num_cols = max(12, min(int(Cfg.terrain.num_cols), 50))
     Cfg.terrain.border_size = 2.0
     Cfg.terrain.x_init_range = 0.0
-    if args.profile == "nominal":
+    if args.competition_spec:
+        Cfg.terrain.low_bar_clearance_min = 0.29
+        Cfg.terrain.low_bar_clearance_max = 0.29
+        Cfg.terrain.low_bar_target_clearance = 0.29
+        Cfg.terrain.robocon_low_bar_clearance_by_level = [
+            0.29 for _ in range(int(Cfg.terrain.num_rows))]
+        Cfg.terrain.low_bar_width = 0.80
+        Cfg.terrain.low_bar_length = 0.80
+        Cfg.terrain.low_bar_asset_path = os.path.join(
+            PROJECT, "resources/objects/low_bar/low_frame_2027.urdf")
+    if args.low_bar_stage is not None:
+        stage_specs = {
+            1: (0.36, 1.10, 0.40, 'low_frame_stage1_h360_w1100_l400.urdf'),
+            2: (0.32, 0.90, 0.80, 'low_frame_stage2_h320_w900_l800.urdf'),
+            3: (0.29, 0.80, 0.80, 'low_frame_2027.urdf'),
+            4: (0.2755, 0.76, 0.84, 'low_frame_stage4_h2755_w760_l840.urdf'),
+        }
+        height, width, length, asset_name = stage_specs[args.low_bar_stage]
+        Cfg.terrain.low_bar_clearance_min = height
+        Cfg.terrain.low_bar_clearance_max = height
+        Cfg.terrain.low_bar_target_clearance = height
+        Cfg.terrain.robocon_low_bar_clearance_by_level = [
+            height for _ in range(int(Cfg.terrain.num_rows))]
+        Cfg.terrain.low_bar_width = width
+        Cfg.terrain.low_bar_length = length
+        Cfg.terrain.low_bar_asset_path = os.path.join(
+            PROJECT, "resources/objects/low_bar", asset_name)
+    if args.clearance is not None:
+        Cfg.terrain.low_bar_clearance_min = args.clearance
+        Cfg.terrain.low_bar_clearance_max = args.clearance
+        Cfg.terrain.low_bar_target_clearance = args.clearance
+        Cfg.terrain.robocon_low_bar_clearance_by_level = [
+            args.clearance for _ in range(int(Cfg.terrain.num_rows))]
+    if args.bar_x is not None:
+        Cfg.terrain.low_bar_x = args.bar_x
+    if args.action_clip_override is not None:
+        Cfg.normalization.clip_actions = args.action_clip_override
+    if args.crouch_control_center:
+        for name in list(Cfg.init_state.default_joint_angles):
+            lname = str(name).lower()
+            if 'hip' in lname:
+                Cfg.init_state.default_joint_angles[name] = (
+                    0.10 if lname.startswith(('fl', 'rl')) else -0.10)
+            elif 'thigh' in lname:
+                Cfg.init_state.default_joint_angles[name] = args.crouch_center_thigh
+            elif 'calf' in lname:
+                Cfg.init_state.default_joint_angles[name] = args.crouch_center_calf
+        Cfg.init_state.pos[2] = args.crouch_center_base_z
+    if args.profile == "nominal" or args.only_randomization is not None:
         Cfg.terrain.y_init_range = 0.0
         Cfg.terrain.yaw_init_range = 0.0
+        Cfg.init_state.dof_pos_scale_range = [1.0, 1.0]
+        Cfg.init_state.base_velocity_half_range = 0.0
         Cfg.noise.add_noise = False
-        for name in (
-            "height_measurements_per_step_xy_noise_std",
-            "height_measurements_per_step_z_noise_std",
-            "height_measurements_per_env_xy_noise_std",
-            "height_measurements_per_env_z_noise_std",
-            "height_measurements_per_env_noise_prob",
-        ):
+        for name in HEIGHT_NOISE_FLAGS:
             if hasattr(Cfg.terrain, name):
                 setattr(Cfg.terrain, name, 0.0)
         _disable_domain_randomization(Cfg)
+    if args.only_randomization is not None:
+        selected = set(args.only_randomization)
+        if "joint-init" in selected:
+            Cfg.init_state.dof_pos_scale_range = saved_randomization["joint_init"]
+        if "base-velocity" in selected:
+            Cfg.init_state.base_velocity_half_range = saved_randomization["base_velocity"]
+        if "observation-noise" in selected:
+            Cfg.noise.add_noise = saved_randomization["observation_noise"]
+        if "height-noise" in selected:
+            for name, value in saved_randomization["height_noise"].items():
+                setattr(Cfg.terrain, name, value)
+        if "dynamics" in selected:
+            for name, value in saved_randomization["dynamics"].items():
+                setattr(Cfg.domain_rand, name, value)
     if args.lateral_init_range is not None:
         Cfg.terrain.y_init_range = args.lateral_init_range
     if args.yaw_init_range is not None:
         Cfg.terrain.yaw_init_range = args.yaw_init_range
     Cfg.asset.self_collisions = 1
+    Cfg.terrain.low_bar_external_evaluator = True
+    Cfg.terrain.low_bar_terminate_on_success = False
     if args.ignore_contact_termination:
         Cfg.terrain.low_bar_contact_force_threshold = 1e9
+    else:
+        Cfg.terrain.low_bar_contact_force_threshold = (
+            args.violent_contact_force_threshold)
     if args.sim_device == "cpu":
         Cfg.sim.use_gpu_pipeline = False
 
-    base_env = VelocityTrackingEasyEnv(
+    env_class = VelocityTrackingEasyEnv
+    if args.joint_passive_damping is not None:
+        damping_values = dict(zip(
+            ("hip", "thigh", "calf"), args.joint_passive_damping))
+
+        class FixedPassiveDampingEnv(VelocityTrackingEasyEnv):
+            def _process_dof_props(self, props, env_id):
+                props = super()._process_dof_props(props, env_id)
+                return _set_joint_passive_damping(
+                    props, self.dof_names, damping_values)
+
+        env_class = FixedPassiveDampingEnv
+
+    base_env = env_class(
         sim_device=args.sim_device, headless=True, cfg=Cfg, debug_viz=False)
     base_env.cfg.terrain.curriculum = False
     env = HistoryWrapper(base_env)
@@ -689,14 +1119,36 @@ def main():
     result = {
         "protocol": {
             "profile": args.profile,
+            "only_randomization": args.only_randomization,
+            "joint_passive_damping_nms_per_rad": (
+                None if args.joint_passive_damping is None else dict(zip(
+                    ("hip", "thigh", "calf"), args.joint_passive_damping))),
             "num_envs": args.num_envs,
             "duration_s": args.duration,
             "vx_mps": args.vx,
             "action_noise_std": args.action_noise_std,
+            "scripted_crouch_scale": args.scripted_crouch_scale,
+            "scripted_crouch_window_m": args.scripted_crouch_window,
+            "scripted_crouch_height_target_m": (
+                args.scripted_crouch_height_target),
+            "scripted_crouch_height_gain": args.scripted_crouch_height_gain,
+            "action_clip_override": args.action_clip_override,
+            "crouch_control_center": bool(args.crouch_control_center),
+            "crouch_center_thigh_rad": args.crouch_center_thigh,
+            "crouch_center_calf_rad": args.crouch_center_calf,
+            "crouch_center_base_z_m": args.crouch_center_base_z,
             "recovery_s": args.recovery_s,
             "contact_force_threshold_n": args.contact_force_threshold,
+            "violent_contact_force_threshold_n": (
+                args.violent_contact_force_threshold),
             "pass_margin_m": args.pass_margin,
             "gate_margin_m": args.gate_margin,
+            "competition_spec_geometry": bool(args.competition_spec),
+            "low_bar_stage": args.low_bar_stage,
+            "fixed_clearance_m": args.clearance,
+            "frame_inner_width_m": float(Cfg.terrain.low_bar_width),
+            "frame_length_m": float(getattr(
+                Cfg.terrain, "low_bar_length", 0.0)),
             "seed": args.seed,
             "seeds": seeds,
             "episodes_per_seed": args.num_envs,
@@ -710,6 +1162,10 @@ def main():
             ],
             "lateral_init_half_range_m": Cfg.terrain.y_init_range,
             "yaw_init_half_range_rad": Cfg.terrain.yaw_init_range,
+            "dof_pos_init_scale_range": list(getattr(
+                Cfg.init_state, "dof_pos_scale_range", [0.5, 1.5])),
+            "base_velocity_init_half_range": float(getattr(
+                Cfg.init_state, "base_velocity_half_range", 0.5)),
             "observation_noise": bool(Cfg.noise.add_noise),
             "height_measurement_noise": {
                 "per_step_xy_std_m": Cfg.terrain.height_measurements_per_step_xy_noise_std,

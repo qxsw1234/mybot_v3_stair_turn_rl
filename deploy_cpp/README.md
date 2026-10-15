@@ -362,6 +362,18 @@ Sim2Sim 相关 topic：
 /joint_states                 RViz 可视化
 ```
 
+### 遥测录包
+
+部署节点在 `/joint_states` 发布 12 关节位置、速度；实机模式的 `effort` 为电机反馈换算后的关节侧力矩（N·m），fake 和 MuJoCo 模式下该数组为空。`/policy_joint_targets` 使用 `sensor_msgs/msg/JointState`，其时间戳、关节名和 `position` 分别表示发送时间、12 关节顺序和已下发的位置目标（rad）。站立和策略状态的位置命令均记录；阻尼和零力矩状态没有位置目标，因此不发布该 topic。
+
+在另一个已经 source ROS2 环境的终端录制，不需要额外启动电机：
+
+```bash
+ros2 bag record -o low_bar_telemetry_$(date +%Y%m%d_%H%M%S) \
+  /joint_states /policy_joint_targets \
+  /fast_livo2/state6_imu_prop /height_measurements
+```
+
 ## 8. Sim2Real: 实机部署
 
 实机运行前，建议按下面顺序验证。

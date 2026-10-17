@@ -1,0 +1,52 @@
+# Evidence record for the first bridge curriculum stage. The trainer reads CLI flags;
+# this file freezes those flags and the selected checkpoints for review.
+stage: beam_1
+status: exploratory_no_promotion
+source:
+  run: runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780
+  checkpoint: 59950
+  checkpoint_sha256: 2690cd2862c59ef60f217d7262c7a41ce714e003fe18814bef9f5e62333f23f1
+course_m:
+  width: 0.80
+  length: 1.50
+  height: 0.03
+  entry_offset: 0.70
+command_vx_mps: 0.35
+num_envs: 512
+trainer: scripts/train_mybot_v3_stair_turn.py
+trainer_mode: beam
+smoke:
+  seed: 2026101503
+  iterations: 25
+  run: runs/mybot_v3_beam_expert_resume_059950/2026-10-15_11-42-30.641069
+  checkpoint: 59974
+short_run:
+  seed: 2026101504
+  iterations: 200
+  run: runs/mybot_v3_beam_expert_resume_059974/2026-10-15_11-45-23.345648
+  checkpoint: 60173
+  checkpoint_sha256: 848f07826ede89f9459798d407550f815b85272e435c91a41b78e7f5c590d3cf
+  body_latest_sha256: 360fd207a517988f4b53d0b6e2ef8f3d1cd7e7397cc97d7bd29a5dd5d2bdb29b
+  adaptation_latest_sha256: edffb9173175ac4a37d4e446d26aa017fd7e7f7aa09f7d334661f8cbd3b46a56
+stage_evidence:
+  summary: evaluations/robocon_2027/p2_20261015/beam_stage1_exploratory200.json
+  isaac_baseline: 197/200
+  isaac_candidate: 193/200
+  mujoco_baseline: 200/200
+  mujoco_candidate: 200/200
+  isaac_initial_states_exactly_paired: false
+  cross_engine_initial_states_exactly_paired: false
+  base_gait_regression_complete: false
+  base_gait_stairs_isaac_smoke:
+    geometry: historical_8_10_12cm_straight_10_risers_not_2027_gully
+    seeds: [2026101616, 2026101617]
+    trials_per_height_per_checkpoint: 40
+    baseline_success_8_10_12cm: [40, 36, 40]
+    candidate_success_8_10_12cm: [36, 35, 28]
+    exactly_paired_initial_states: false
+    interpretation: candidate_regresses_especially_12cm_stop_this_configuration
+  next_width_allowed: false
+notes:
+  - Isaac bridge is a finite heightfield training approximation; MuJoCo uses a box.
+  - This course has no flat/turn/stairs replay mixture yet.
+  - At 0.05 m horizontal scale, 0.38 m width is not representable; use a finer validated grid before that stage.

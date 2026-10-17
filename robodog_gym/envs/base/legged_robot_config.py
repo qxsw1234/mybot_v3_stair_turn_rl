@@ -130,6 +130,17 @@ class Cfg(PrefixProto, cli=False):
         center_robots = False # center robots in the middle of the terrain grid, only makes sense without curriculum (wtw addition)
         center_span = 5
 
+        # ---- ROBOCON 2027 single-beam curriculum ----
+        sim2sim_bridge = False
+        robocon_beam = False
+        bridge_width = 0.80
+        bridge_length = 1.50
+        bridge_height = 0.03
+        bridge_start_offset = 0.70
+        bridge_edge_target_margin = 0.08
+        bridge_replay = False
+        bridge_train_cols = 15
+
         # ---- ROBOCON low-bar (限高杆 / 矮门) obstacle ----
         # A real collision geometry placed inside each terrain tile (flat
         # ground + one fixed-base actor holding the complete frame).  The
@@ -469,6 +480,11 @@ class Cfg(PrefixProto, cli=False):
         low_bar_success = 0.0
         low_bar_collision = 0.0
         low_bar_missed_gate = 0.0
+        bridge_progress = 0.0
+        bridge_centerline = 0.0
+        bridge_foot_edge = 0.0
+        bridge_success = 0.0
+        bridge_failure = 0.0
 
     class normalization(PrefixProto, cli=False):
         clip_observations = 100.

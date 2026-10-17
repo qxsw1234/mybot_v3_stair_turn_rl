@@ -52,6 +52,32 @@ def straight_stairs_terrain(terrain, step_width, step_height,
     return terrain
 
 
+def straight_beam_terrain(terrain, width, length, height, start_offset=0.70):
+    """Finite raised bridge on flat ground, centred on the tile's y axis."""
+    scale = float(terrain.horizontal_scale)
+    vertical = float(terrain.vertical_scale)
+    if min(width, length, height, start_offset) <= 0:
+        raise ValueError("bridge dimensions and start offset must be positive")
+    start_x = terrain.width // 2 + int(round(start_offset / scale))
+    end_x = start_x + max(1, int(round(length / scale)))
+    centre_y = terrain.length // 2
+    half_width = max(1, int(round(0.5 * width / scale)))
+    height_cells = int(round(height / vertical))
+    realised = (2 * half_width * scale, (end_x - start_x) * scale,
+                height_cells * vertical)
+    requested = (width, length, height)
+    if any(abs(real - target) > 1e-6 for real, target in zip(realised, requested)):
+        raise ValueError(
+            f"bridge geometry {requested} m is not representable at "
+            f"horizontal/vertical scales {scale}/{vertical} m; got {realised} m")
+    start_y = centre_y - half_width
+    end_y = centre_y + half_width
+    if start_x < 0 or end_x > terrain.width or start_y < 0 or end_y > terrain.length:
+        raise ValueError("bridge must fit inside its terrain tile")
+    terrain.height_field_raw[start_x:end_x, start_y:end_y] = height_cells
+    return terrain
+
+
 class Terrain:
     def __init__(self, cfg: Cfg.terrain, num_robots, eval_cfg=None, num_eval_robots=0) -> None:
 
@@ -129,6 +155,10 @@ class Terrain:
             (i, j) = np.unravel_index(k, (cfg.num_rows, cfg.num_cols))
 
             choice = np.random.uniform(0, 1)
+            if getattr(cfg, 'bridge_replay', False):
+                # A fixed column is a fixed task; terrain_types in the robot
+                # must refer to exactly the same bridge/replay assignment.
+                choice = (j + 0.5) / cfg.num_cols
             difficulty = np.random.choice([0.5, 0.75, 0.9])
             terrain = self.make_terrain(cfg, choice, difficulty, cfg.proportions)
             self.add_terrain_to_map(cfg, terrain, i, j)
@@ -165,6 +195,28 @@ class Terrain:
                                            length=cfg.length_per_env_pixels,
                                            vertical_scale=cfg.vertical_scale,
                                            horizontal_scale=cfg.horizontal_scale)
+        if getattr(cfg, 'sim2sim_bridge', False):
+            if getattr(cfg, 'bridge_replay', False):
+                if int(cfg.num_cols) != 20 or int(cfg.bridge_train_cols) != 15:
+                    raise ValueError('bridge replay needs 20 columns: 15 bridge + 5 replay')
+                column = min(19, int(choice * 20))
+                if column >= 15:
+                    # 15: flat forward, 16: flat turning; 17-19: 8/10/12 cm
+                    # straight stairs with a flat approach at the tile centre.
+                    if column <= 16:
+                        return terrain
+                    return straight_stairs_terrain(
+                        terrain, step_width=0.30,
+                        step_height=(0.08, 0.10, 0.12)[column - 17],
+                        start_offset=0.55, stair_width=2.0,
+                        num_steps=8, top_length=0.90)
+            return straight_beam_terrain(
+                terrain,
+                width=float(cfg.bridge_width),
+                length=float(cfg.bridge_length),
+                height=float(cfg.bridge_height),
+                start_offset=float(cfg.bridge_start_offset),
+            )
         slope = difficulty * 0.4
         # step_height = 0.05 + 0.18 * difficulty
         step_height = 0.05 + difficulty*(cfg.max_step_height-0.05)
@@ -260,7 +312,8 @@ class Terrain:
         x2 = int((cfg.terrain_width / 2. + 1) / terrain.horizontal_scale) + cfg.x_offset
         y1 = int((cfg.terrain_length / 2. - 1) / terrain.horizontal_scale)
         y2 = int((cfg.terrain_length / 2. + 1) / terrain.horizontal_scale)
-        if getattr(cfg, 'sim2sim_straight_stairs', False):
+        if (getattr(cfg, 'sim2sim_straight_stairs', False)
+                or getattr(cfg, 'sim2sim_bridge', False)):
             # The matched staircase has a flat approach at the map centre.
             # Sampling that exact patch keeps the base on the ground; the old
             # 2 m max window included the first risers and spawned it in air.

@@ -8,6 +8,7 @@ the lane, does not fall, and is still valid after two seconds of stand hold.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -135,11 +136,11 @@ def failure_reason(sim, lane_y, top_height, stair_end):
     return "success"
 
 
-def run_trial(config, lane_index, params, max_move_seconds):
+def run_trial(config, lane_index, params, max_move_seconds, body_path=DEFAULT_BODY, adaptation_path=DEFAULT_ADAPTATION):
     sim = ThreeStairsSim(
         config,
-        DEFAULT_BODY,
-        DEFAULT_ADAPTATION,
+        body_path,
+        adaptation_path,
         DEFAULT_CONFIG.parents[2],
         "aligned_damped",
     )
@@ -250,10 +251,15 @@ def main():
     parser.add_argument("--seed", type=int, default=59950)
     parser.add_argument("--max-move-seconds", type=float, default=18.0)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--body", type=Path, default=DEFAULT_BODY)
+    parser.add_argument("--adaptation", type=Path, default=DEFAULT_ADAPTATION)
     args = parser.parse_args()
     if args.trials_per_height <= 0:
         parser.error("--trials-per-height must be positive")
 
+    for path in (args.body, args.adaptation):
+        if not path.is_file():
+            parser.error(f"model file not found: {path}")
     config = load_config(DEFAULT_CONFIG)
     apply_policy_profile(config, "config")
     rng = np.random.default_rng(args.seed)
@@ -263,7 +269,8 @@ def main():
         for trial_index in range(args.trials_per_height):
             params = sample_parameters(rng, args.mode)
             record = run_trial(
-                config, lane_index, params, args.max_move_seconds
+                config, lane_index, params, args.max_move_seconds,
+                args.body, args.adaptation,
             )
             record["trial"] = trial_index
             records.append(record)
@@ -277,7 +284,10 @@ def main():
             sys.stdout.flush()
 
     payload = {
-        "checkpoint": "059950",
+        "checkpoint": str(args.body),
+        "body_sha256": hashlib.sha256(args.body.read_bytes()).hexdigest(),
+        "adaptation": str(args.adaptation),
+        "adaptation_sha256": hashlib.sha256(args.adaptation.read_bytes()).hexdigest(),
         "profile": "aligned_damped",
         "mode": args.mode,
         "seed": args.seed,

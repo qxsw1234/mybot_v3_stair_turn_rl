@@ -25,6 +25,7 @@ def train_mybot_v3_stair_turn(
     freeze_adaptation_module=False,
     resume_learning_rate=None,
     policy_anchor_coef=0.0,
+    policy_anchor_reference=None,
     low_bar_lateral_init_range=0.0,
     low_bar_yaw_init_range=0.0,
     low_bar_spec_only=False,
@@ -33,6 +34,11 @@ def train_mybot_v3_stair_turn(
     low_bar_crouch_center=False,
     low_bar_crawl_vx=0.50,
     low_bar_x=2.0,
+    beam_width=0.80,
+    beam_length=1.50,
+    beam_height=0.03,
+    beam_vx=0.35,
+    beam_replay=False,
 ):
 
     import isaacgym
@@ -78,6 +84,8 @@ def train_mybot_v3_stair_turn(
         raise ValueError("--policy-anchor-coef must be non-negative")
     if policy_anchor_coef > 0.0 and resume_run is None:
         raise ValueError("--policy-anchor-coef requires --resume-run")
+    if policy_anchor_reference is not None and policy_anchor_coef <= 0.0:
+        raise ValueError("--policy-anchor-reference requires positive --policy-anchor-coef")
     if low_bar_pretrain and (robocon_obstacle != "low_bar" or low_bar_stage != 1):
         raise ValueError(
             "--low-bar-pretrain currently requires --low-bar-stage 1")
@@ -85,6 +93,12 @@ def train_mybot_v3_stair_turn(
         raise ValueError("--low-bar-crouch-center requires low_bar mode")
     if low_bar_crawl_vx <= 0.0:
         raise ValueError("--low-bar-crawl-vx must be positive")
+    if min(beam_width, beam_length, beam_height, beam_vx) <= 0.0:
+        raise ValueError("beam width, length, height, and vx must be positive")
+    if beam_replay and robocon_obstacle != "beam":
+        raise ValueError("--beam-replay requires --robocon-obstacle beam")
+    if beam_replay and num_envs < 20:
+        raise ValueError("--beam-replay needs at least 20 environments")
 
     Cfg.env.num_envs = num_envs
     Cfg.cfg_ppo.seed = seed
@@ -484,6 +498,46 @@ def train_mybot_v3_stair_turn(
         Cfg.terrain.curriculum_stair_min_elevation = 0.06
         Cfg.terrain.curriculum_stair_min_elevation_steps = 6.0
 
+    elif Cfg.terrain.robocon_obstacle == "beam":
+        # Stage 1 only. This finite raised heightfield is a training
+        # approximation; the independent rule evaluator uses a box bridge.
+        Cfg.terrain.sim2sim_bridge = True
+        Cfg.terrain.robocon_beam = True
+        Cfg.terrain.bridge_width = beam_width
+        Cfg.terrain.bridge_length = beam_length
+        Cfg.terrain.bridge_height = beam_height
+        Cfg.terrain.bridge_start_offset = 0.70
+        Cfg.terrain.bridge_edge_target_margin = 0.08
+        Cfg.terrain.curriculum = False
+        Cfg.terrain.num_rows = 1
+        Cfg.terrain.num_cols = 20 if beam_replay else 8
+        Cfg.terrain.bridge_replay = beam_replay
+        Cfg.terrain.bridge_train_cols = 15
+        Cfg.terrain.border_size = 3.0
+        Cfg.terrain.horizontal_scale = 0.05
+        Cfg.terrain.slope_treshold = 0.10
+        Cfg.terrain.x_init_range = 0.03
+        Cfg.terrain.y_init_range = 0.03
+        Cfg.terrain.yaw_init_range = 0.035
+        Cfg.terrain.teleport_robots = False
+        Cfg.env.episode_length_s = 16.0
+        Cfg.domain_rand.push_robots = False
+        Cfg.domain_rand.randomize_gravity = False
+        Cfg.domain_rand.randomize_base_mass = False
+        Cfg.domain_rand.randomize_com_displacement = False
+        Cfg.domain_rand.randomize_friction = False
+        Cfg.domain_rand.randomize_restitution = False
+        Cfg.domain_rand.randomize_ground_friction = False
+        Cfg.domain_rand.randomize_friction_indep = False
+        Cfg.domain_rand.randomize_motor_strength = False
+        Cfg.domain_rand.randomize_motor_offset = False
+        Cfg.domain_rand.randomize_lag_timesteps = False
+        Cfg.reward_scales.bridge_progress = 3.0
+        Cfg.reward_scales.bridge_centerline = -2.0
+        Cfg.reward_scales.bridge_foot_edge = -3.0
+        Cfg.reward_scales.bridge_success = 20.0
+        Cfg.reward_scales.bridge_failure = -5.0
+
     elif Cfg.terrain.robocon_obstacle == "low_bar":
         # ROBOCON low-bar (限高杆 / 矮门): flat ground + a real collision
         # gate (cross-bar + two posts) placed inside each env.  The bar CANNOT
@@ -801,6 +855,7 @@ def train_mybot_v3_stair_turn(
     Cfg.cfg_ppo.algorithm.lr_adaptive_schedule_decay = 1.25
     Cfg.cfg_ppo.algorithm.action_clip = Cfg.normalization.clip_actions
     Cfg.cfg_ppo.algorithm.policy_anchor_coef = policy_anchor_coef
+    Cfg.cfg_ppo.algorithm.policy_anchor_reference_checkpoint = policy_anchor_reference
 
     # With a smaller fixed exploration std, a parameter step produces a much
     # larger policy KL. Use a correspondingly smaller actor step so PPO can
@@ -910,6 +965,21 @@ def train_mybot_v3_stair_turn(
     Cfg.commands.train_standing_still = True
     Cfg.commands.standing_still_prob = 0.10
 
+    if robocon_obstacle == "beam":
+        Cfg.commands.heading_command = False
+        Cfg.commands.command_curriculum = False
+        Cfg.commands.resampling_time = Cfg.env.episode_length_s
+        Cfg.commands.lin_vel_x = [0.15, max(0.40, beam_vx)] if beam_replay else [beam_vx, beam_vx]
+        Cfg.commands.limit_vel_x = Cfg.commands.lin_vel_x.copy()
+        Cfg.commands.lin_vel_y = [-0.15, 0.15] if beam_replay else [0.0, 0.0]
+        Cfg.commands.limit_vel_y = Cfg.commands.lin_vel_y.copy()
+        Cfg.commands.ang_vel_yaw = [-0.40, 0.40] if beam_replay else [0.0, 0.0]
+        Cfg.commands.limit_vel_yaw = Cfg.commands.ang_vel_yaw.copy()
+        Cfg.commands.bridge_replay_commands = beam_replay
+        Cfg.commands.bridge_replay_vx = beam_vx
+        Cfg.commands.train_standing_still = False
+        Cfg.commands.standing_still_prob = 0.0
+
     if robocon_obstacle == "low_bar":
         # An obstacle expert must repeatedly approach the gate. Reverse and
         # large turn commands let the policy avoid the task while collecting
@@ -955,7 +1025,7 @@ def train_mybot_v3_stair_turn(
     # rollout and leave a short fine-tuning block with almost no successes.
     runner.learn(
         num_learning_iterations=iterations,
-        init_at_random_ep_len=robocon_obstacle != "low_bar",
+        init_at_random_ep_len=robocon_obstacle not in {"low_bar", "beam"},
         eval_freq=50,
     )
 
@@ -975,7 +1045,7 @@ if __name__ == '__main__':
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--resume-run", type=str, default=None)
     parser.add_argument("--checkpoint", type=int, default=-1)
-    parser.add_argument("--robocon-obstacle", choices=["mixed", "stairs", "low_bar"],
+    parser.add_argument("--robocon-obstacle", choices=["mixed", "stairs", "low_bar", "beam"],
                         default="mixed")
     parser.add_argument(
         "--low-bar-spec-only",
@@ -1012,6 +1082,12 @@ if __name__ == '__main__':
         help=("Expand only the known CSE input layers when a resumed checkpoint "
               "has fewer per-frame observations; new appended fields start at zero."),
     )
+    parser.add_argument("--beam-width", type=float, default=0.80)
+    parser.add_argument("--beam-length", type=float, default=1.50)
+    parser.add_argument("--beam-height", type=float, default=0.03)
+    parser.add_argument("--beam-vx", type=float, default=0.35)
+    parser.add_argument("--beam-replay", action="store_true",
+                        help="Use 15 bridge and 5 flat/turn/stair replay columns.")
     parser.add_argument("--save-interval", type=int, default=250)
     parser.add_argument(
         "--divergence-warmup-iterations",
@@ -1055,6 +1131,10 @@ if __name__ == '__main__':
         default=0.0,
         help=("Penalize mean-action drift from the policy loaded at the start "
               "of this run."),
+    )
+    parser.add_argument(
+        "--policy-anchor-reference", type=str, default=None,
+        help="Keep the policy anchor fixed to this actor-critic checkpoint across resumed runs.",
     )
     parser.add_argument(
         "--low-bar-lateral-init-range",
@@ -1188,6 +1268,7 @@ if __name__ == '__main__':
         freeze_adaptation_module=args.freeze_adaptation_module,
         resume_learning_rate=args.resume_learning_rate,
         policy_anchor_coef=args.policy_anchor_coef,
+        policy_anchor_reference=args.policy_anchor_reference,
         low_bar_lateral_init_range=args.low_bar_lateral_init_range,
         low_bar_yaw_init_range=args.low_bar_yaw_init_range,
         low_bar_spec_only=args.low_bar_spec_only,
@@ -1196,4 +1277,16 @@ if __name__ == '__main__':
         low_bar_crouch_center=args.low_bar_crouch_center,
         low_bar_crawl_vx=args.low_bar_crawl_vx,
         low_bar_x=args.low_bar_x,
+        beam_width=args.beam_width,
+        beam_length=args.beam_length,
+        beam_height=args.beam_height,
+        beam_vx=args.beam_vx,
+        beam_replay=args.beam_replay,
     )
+    if args.robocon_obstacle == "beam":
+        # Match the existing phase3b trainer: Isaac Gym can segfault during
+        # Python/PhysX teardown after checkpoints have been written.
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)

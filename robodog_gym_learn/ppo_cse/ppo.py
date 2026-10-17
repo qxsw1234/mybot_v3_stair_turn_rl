@@ -35,11 +35,32 @@ class PPO:
                 self.actor_critic.actor_body).to(device).eval()
             self.reference_adaptation_module = copy.deepcopy(
                 self.actor_critic.adaptation_module).to(device).eval()
+            anchor_path = getattr(
+                self.cfg_ppo.algorithm, 'policy_anchor_reference_checkpoint', None)
+            if anchor_path:
+                state = torch.load(str(anchor_path), map_location=device)
+                for prefix, module in (
+                    ('actor_body.', self.reference_actor_body),
+                    ('adaptation_module.', self.reference_adaptation_module),
+                ):
+                    selected = {
+                        key[len(prefix):]: value for key, value in state.items()
+                        if key.startswith(prefix)
+                    }
+                    if not selected:
+                        raise ValueError(
+                            f'Anchor checkpoint lacks {prefix} parameters: {anchor_path}')
+                    module.load_state_dict(selected, strict=True)
+                print(f'[Policy anchor] Fixed reference: {anchor_path}', flush=True)
             for parameter in self.reference_actor_body.parameters():
                 parameter.requires_grad_(False)
             for parameter in self.reference_adaptation_module.parameters():
                 parameter.requires_grad_(False)
         else:
+            if getattr(self.cfg_ppo.algorithm,
+                       'policy_anchor_reference_checkpoint', None):
+                raise ValueError(
+                    'policy_anchor_reference_checkpoint requires positive policy_anchor_coef')
             self.reference_actor_body = None
             self.reference_adaptation_module = None
         # The actor and critic have disjoint networks. Keep their optimizers and

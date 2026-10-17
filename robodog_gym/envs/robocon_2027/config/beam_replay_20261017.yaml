@@ -1,0 +1,71 @@
+stage: beam_replay_20261017
+status: exploratory_no_promotion
+source:
+  run: runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780
+  checkpoint: 59950
+  checkpoint_sha256: 2690cd2862c59ef60f217d7262c7a41ce714e003fe18814bef9f5e62333f23f1
+course:
+  beam_width_m: 0.80
+  beam_length_m: 1.50
+  beam_height_m: 0.03
+  beam_vx_mps: 0.35
+  terrain_columns: 20
+  beam_columns: 15
+  replay_columns: [flat_forward, flat_turn, stairs_8cm, stairs_10cm, stairs_12cm]
+  num_envs: 512
+trainer: scripts/train_mybot_v3_stair_turn.py
+trainer_flags: [--robocon-obstacle, beam, --beam-replay, --num-envs, 512, --policy-anchor-coef, 1.0]
+anchor_reference: runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780/checkpoints/ac_weights_059950.pt
+smoke:
+  seed: 2026101701
+  iterations: 25
+  run: runs/mybot_v3_beam_expert_resume_059950/2026-10-16_16-26-21.802680
+  checkpoint: 59974
+unanchored_branch:
+  seed: 2026101702
+  iterations: 100
+  run: runs/mybot_v3_beam_expert_resume_059974/2026-10-16_16-27-08.547308
+  checkpoint: 60073
+  isaac_beam: 59/60
+  isaac_stairs: 54/60
+anchored_branch:
+  first_100:
+    seed: 2026101706
+    iterations: 100
+    run: runs/mybot_v3_beam_expert_resume_059950/2026-10-16_16-33-04.767570
+    checkpoint: 60049
+    checkpoint_sha256: ba75519ad6afa11d91bde8aca2c209f3ba5a66e41cea510c6dad86890370930d
+    isaac_beam: 59/60
+    isaac_stairs: 58/60
+  second_100:
+    seed: 2026101707
+    iterations: 100
+    run: runs/mybot_v3_beam_expert_resume_060049/2026-10-16_16-36-23.211375
+    checkpoint: 60148
+    checkpoint_sha256: f742fd7f328092b7a736e82a0102b16bcd00e72cc96f897e85f489495cbe4345
+    body_latest_sha256: 90dff88c55711205793e26cbb90914dfef2d0ab54d60b830c65fd62077db6541
+    adaptation_latest_sha256: cafd7ea585ecfd0136ce87cf4ebab0e12cadd5f0e336f9ef2e3d6a7a5b77499d
+    isaac_beam: 59/60
+    isaac_stairs: 57/60
+baseline:
+  isaac_beam: 60/60
+  isaac_stairs: 58/60
+mode_switch:
+  geometry_m: [0.40, 3.00, 0.10]
+  seed: 2026101708
+  trials: 100
+  baseline_successes: 92
+  switched_successes: 94
+  complete_double_switches: 94
+  switched_success_p95_s: 41.977
+  result: evaluations/robocon_2027/p2_20261017/beam_anchor200_modes100.json
+  demo: evaluations/robocon_2027/p2_20261017/beam_anchor200_mode_demo.mp4
+  promotion_threshold: 95/100
+  threshold_met: false
+next_width_allowed: false
+real_robot_allowed: false
+notes:
+  - Isaac bridge is finite heightfield; rule MuJoCo bridge is a box.
+  - The Isaac baseline and candidate are not guaranteed strictly paired after GPU warmup.
+  - Flat and turn >=200-episode regression and formal paired cross-engine evaluation remain pending.
+  - Skill switching remains a simulation prototype without calibrated hardware limits.

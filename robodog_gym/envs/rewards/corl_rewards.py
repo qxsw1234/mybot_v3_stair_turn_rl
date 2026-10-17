@@ -216,6 +216,45 @@ class CoRLRewards:
         base_height = torch.mean(self.env.root_states[:self.env.num_envs, 2].unsqueeze(1) - self.env.measured_heights, dim=1)
         return torch.square(base_height - self.env.cfg.rewards.base_height_target)
 
+    def _bridge_active(self):
+        env = self.env
+        start = float(env.cfg.terrain.bridge_start_offset)
+        length = float(env.cfg.terrain.bridge_length)
+        x = env.base_pos[:, 0] - env.env_origins[:, 0]
+        return (x >= start - 0.35) & (x <= start + length + 0.15) & env._bridge_env_mask()
+
+    def _reward_bridge_progress(self):
+        env = self.env
+        active = self._bridge_active().float()
+        world_vx = env.root_states[:env.num_envs, 7]
+        return active * torch.clamp(world_vx, -0.5, 0.5)
+
+    def _reward_bridge_centerline(self):
+        env = self.env
+        lateral = env.base_pos[:, 1] - env.env_origins[:, 1]
+        return self._bridge_active().float() * lateral.square()
+
+    def _reward_bridge_foot_edge(self):
+        env = self.env
+        start = float(env.cfg.terrain.bridge_start_offset)
+        end = start + float(env.cfg.terrain.bridge_length)
+        width = float(env.cfg.terrain.bridge_width)
+        target = float(env.cfg.terrain.bridge_edge_target_margin)
+        rel_x = env.foot_positions[:, :, 0] - env.env_origins[:, 0:1]
+        rel_y = env.foot_positions[:, :, 1] - env.env_origins[:, 1:2]
+        supporting = env.contact_forces[:, env.feet_indices, 2] > 1.0
+        on_bridge = supporting & (rel_x >= start) & (rel_x <= end)
+        margin = 0.5 * width - rel_y.abs()
+        return ((torch.clamp(target - margin, min=0.0) *
+                 on_bridge.float()).sum(dim=1) *
+                env._bridge_env_mask().float())
+
+    def _reward_bridge_success(self):
+        return self.env.beam_success_this_step.float() / self.env.dt
+
+    def _reward_bridge_failure(self):
+        return self.env.beam_outside_this_step.float() / self.env.dt
+
     def _reward_low_bar_crouch(self):
         """Guide the robot toward a kinematically feasible crouch pose.
 

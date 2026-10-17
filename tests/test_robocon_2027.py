@@ -1,5 +1,10 @@
 import unittest
 
+from scripts.eval_robocon_2027_baselines import (
+    aggregate_contact_snapshots,
+    slalom_projected_passes,
+)
+
 from robodog_gym.envs.robocon_2027 import (
     ObstacleAttempt,
     ScoreLedger,
@@ -67,6 +72,79 @@ class EvaluatorTest(unittest.TestCase):
         # frame belongs to subsequent locomotion rather than this attempt.
         attempt.mark("fell")
         self.assertTrue(attempt.finalize().passed)
+
+    def test_slalom_order_and_alternating_sides(self):
+        attempt = ObstacleAttempt("slalom")
+        attempt.reach_zone("start")
+        for index in range(1, 7):
+            if index == 5:
+                attempt.reach_zone("corner")
+            attempt.pass_slalom_pole(
+                index, "left" if index % 2 else "right", 0.39 if index % 2 else -0.39)
+        attempt.reach_zone("finish")
+        attempt.mark("crossed")
+        self.assertTrue(attempt.finalize().passed)
+        self.assertEqual(len(attempt.finalize().metrics["slalom_events"]), 9)
+
+    def test_slalom_skipped_pole_and_early_corner_fail(self):
+        attempt = ObstacleAttempt("slalom")
+        attempt.reach_zone("start")
+        attempt.pass_slalom_pole(1, "left", 0.39)
+        attempt.pass_slalom_pole(3, "left", 0.39)
+        attempt.reach_zone("corner")
+        attempt.mark("crossed")
+        self.assertEqual(attempt.finalize().reason, "slalom_sequence_error")
+
+    def test_slalom_wrong_side_and_reset(self):
+        attempt = ObstacleAttempt("slalom")
+        attempt.reach_zone("start")
+        attempt.pass_slalom_pole(1, "right", -0.39)
+        self.assertEqual(attempt.finalize().reason, "wrong_pole_side")
+        fresh = ObstacleAttempt("slalom")
+        self.assertEqual(fresh.slalom_events, [])
+        self.assertEqual(fresh.flags, set())
+
+    def test_slalom_contact_overrides_completed_path(self):
+        attempt = ObstacleAttempt("slalom")
+        attempt.reach_zone("start")
+        for index in range(1, 7):
+            if index == 5:
+                attempt.reach_zone("corner")
+            attempt.pass_slalom_pole(
+                index, "left" if index % 2 else "right", 0.39 if index % 2 else -0.39)
+        attempt.reach_zone("finish")
+        attempt.mark("crossed")
+        attempt.mark("pole_contact")
+        self.assertEqual(attempt.finalize().reason, "pole_contact")
+
+    def test_short_substep_pole_contact_is_retained(self):
+        def snapshot(bodies, floor_feet):
+            return {
+                "floor_feet": set(floor_feet),
+                "surface_feet": set(),
+                "surface_contact_points": [],
+                "obstacle_bodies": set(bodies),
+                "obstacle_geoms": {"pole_1"} if bodies else set(),
+                "max_obstacle_force_n": 12.0 if bodies else 0.0,
+                "total_obstacle_force_n": 12.0 if bodies else 0.0,
+                "max_contacting_robot_top_z": 0.0,
+            }
+        snapshots = [
+            snapshot([], ["FL"]),
+            snapshot(["FR_foot"], ["FL", "FR"]),
+            snapshot([], ["FR"]),
+            snapshot([], []),
+        ]
+        combined = aggregate_contact_snapshots(snapshots, 0.005)
+        self.assertIn("FR_foot", combined["obstacle_bodies"])
+        self.assertEqual(combined["max_simultaneous_floor_feet"], {"FL", "FR"})
+        self.assertAlmostEqual(combined["obstacle_impulse_ns"], 0.06)
+
+    def test_slalom_projection_catches_skipped_and_wrong_side(self):
+        projected = slalom_projected_passes((-0.1, -0.02), (1.0, -0.02))
+        self.assertEqual([item[0] for item in projected], [1, 2])
+        self.assertEqual(projected[0][1], "center")
+        self.assertEqual(projected[1][1], "center")
 
     def test_tire_hole_is_not_rule_failure(self):
         attempt = ObstacleAttempt("tire_array")

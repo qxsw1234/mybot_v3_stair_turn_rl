@@ -12,6 +12,10 @@ from .rules import ORDINARY_OBSTACLES, load_rules
 
 
 GULLY_SUBTASKS = ("gully_ascent", "gully_gap", "gully_descent")
+SLALOM_SEQUENCE = (
+    "start", "pole_1", "pole_2", "pole_3", "pole_4",
+    "corner", "pole_5", "pole_6", "finish",
+)
 
 
 def half_or_more_feet(total_feet: int, contact_feet: Iterable[str]) -> bool:
@@ -45,6 +49,8 @@ class ObstacleAttempt:
         self.required_surfaces = set(required_surfaces)
         self.touched_once: Set[str] = set()
         self.reached_zones: Set[str] = set()
+        self.slalom_events = []
+        self.slalom_pole_offsets_m = {}
         self.flags: Set[str] = set()
         self.outside_ground_feet: Set[str] = set()
         self.frame_contacts = 0
@@ -58,9 +64,42 @@ class ObstacleAttempt:
         return first
 
     def reach_zone(self, zone: str) -> bool:
+        if self.obstacle == "slalom":
+            if zone not in {"start", "corner", "finish"}:
+                raise ValueError(f"unknown slalom zone: {zone}")
+            return self._slalom_event(zone)
         first = zone not in self.reached_zones
         self.reached_zones.add(zone)
         return first
+
+    def _slalom_event(self, event: str) -> bool:
+        if event in self.slalom_events:
+            return False
+        next_index = len(self.slalom_events)
+        if next_index >= len(SLALOM_SEQUENCE) or event != SLALOM_SEQUENCE[next_index]:
+            self.flags.add("slalom_sequence_error")
+            return False
+        self.slalom_events.append(event)
+        if event in {"start", "corner", "finish"}:
+            self.reached_zones.add(event)
+        return True
+
+    def pass_slalom_pole(self, index: int, side: str, offset_m: float) -> bool:
+        """Record a projected centre-line crossing and its signed clearance."""
+        if self.obstacle != "slalom" or index not in range(1, 7):
+            raise ValueError("slalom pole index must be 1..6")
+        if side not in {"left", "right", "center"}:
+            raise ValueError("slalom side must be left, right, or center")
+        event = f"pole_{index}"
+        if event in self.slalom_events:
+            return False
+        expected = "left" if index % 2 else "right"
+        if side != expected:
+            self.flags.add("wrong_pole_side")
+        accepted = self._slalom_event(event)
+        if accepted:
+            self.slalom_pole_offsets_m[event] = float(offset_m)
+        return accepted
 
     def mark(self, event: str) -> None:
         self.flags.add(event)
@@ -85,6 +124,8 @@ class ObstacleAttempt:
             "outside_ground_feet": sorted(self.outside_ground_feet),
             "touched_once": sorted(self.touched_once),
             "reached_zones": sorted(self.reached_zones),
+            "slalom_events": list(self.slalom_events),
+            "slalom_pole_offsets_m": dict(self.slalom_pole_offsets_m),
         }
 
     def finalize(self) -> AttemptResult:
@@ -107,6 +148,12 @@ class ObstacleAttempt:
             reason = "pole_contact"
         elif "pole_overflight" in self.flags:
             reason = "pole_overflight"
+        elif "wrong_pole_side" in self.flags:
+            reason = "wrong_pole_side"
+        elif "slalom_sequence_error" in self.flags:
+            reason = "slalom_sequence_error"
+        elif len(self.slalom_events) != len(SLALOM_SEQUENCE):
+            reason = "missing_or_unordered_pole_pass"
         elif not required.issubset(self.reached_zones):
             reason = "missing_required_zones"
         elif "crossed" not in self.flags:

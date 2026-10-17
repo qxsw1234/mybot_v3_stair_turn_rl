@@ -14,10 +14,12 @@ events, completion time and contact telemetry the M1 gate needs.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -53,6 +55,28 @@ LOCOMOTION_CKPT = (
     / "runs/mybot_v3_sim2sim_phase3b_resume_059500"
     / "2026-10-03_07-04-56.647780/checkpoints"
 )
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def git_provenance() -> Dict:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT,
+        check=True, capture_output=True).stdout.decode().strip()
+    diff = subprocess.run(
+        ["git", "diff", "--binary", "HEAD"], cwd=PROJECT_ROOT,
+        check=True, capture_output=True).stdout
+    return {
+        "commit": head,
+        "dirty_diff_sha256": hashlib.sha256(diff).hexdigest(),
+        "dirty": bool(diff),
+    }
+
+
 LOW_FRAME_CKPT = (
     PROJECT_ROOT
     / "runs/mybot_v3_low_bar_expert_resume_062097"
@@ -165,7 +189,7 @@ PURSUIT = {
     # ``speed`` is the commanded body-frame forward speed.  The low-level
     # policy tracks roughly half of the commanded value at walking pace, so
     # these numbers are deliberately above the intended ground speed.
-    "slalom": dict(speed=0.28, k_cross=4.0, k_yaw=1.4, vy_max=0.40, yaw_max=0.45, k_slow=3.0),
+    "slalom": dict(speed=0.28, k_cross=4.0, k_yaw=1.4, vy_max=0.40, yaw_max=0.45, k_slow=3.0, heading_slow=3.0, lookahead_m=0.0, curvature_slow=0.0),
     # The measured stance is 0.405 m wide, the bridge is 0.400 m wide, so the
     # centre line error budget is only about +-0.15 m.  Give lateral recovery
     # strong priority over forward progress.
@@ -272,6 +296,12 @@ def aggregate_contact_snapshots(snapshots: List[Dict], physics_dt: float) -> Dic
         snapshot["max_contacting_robot_top_z"] for snapshot in snapshots)
     combined["obstacle_impulse_ns"] = physics_dt * sum(
         snapshot["total_obstacle_force_n"] for snapshot in snapshots)
+    most_floor_feet = max(snapshots, key=lambda snapshot: len(snapshot["floor_feet"]))
+    combined["max_simultaneous_floor_feet"] = set(most_floor_feet["floor_feet"])
+    combined["surface_contact_points"] = [
+        point for snapshot in snapshots
+        for point in snapshot["surface_contact_points"]
+    ]
     return combined
 
 
@@ -356,6 +386,7 @@ class Robocon2027Sim(MybotV3Sim):
         self.scene_path = build_scene_xml(
             obstacle, rules, low_frame_training_payload,
             low_frame_isaac_dynamics)
+        self.scene_xml_sha256 = sha256_file(self.scene_path)
         config = load_config(DEFAULT_CONFIG)
         apply_policy_profile(config, "config")
         config = dict(config)
@@ -542,6 +573,7 @@ class Robocon2027Sim(MybotV3Sim):
     def contact_snapshot(self) -> Dict:
         floor_feet = set()
         surface_feet = set()
+        surface_contact_points = []
         obstacle_bodies = set()
         obstacle_geoms = set()
         max_obstacle_force_n = 0.0
@@ -562,6 +594,10 @@ class Robocon2027Sim(MybotV3Sim):
                     floor_feet.add(foot_name)
                 if static_geom in self.surface_geom_ids and foot_name:
                     surface_feet.add(foot_name)
+                    surface_contact_points.append({
+                        "foot": foot_name,
+                        "xyz": [float(value) for value in contact.pos],
+                    })
                 if static_geom in relevant and body_id != 0:
                     body_name = mujoco.mj_id2name(
                         self.model, mujoco.mjtObj.mjOBJ_BODY, body_id
@@ -591,6 +627,8 @@ class Robocon2027Sim(MybotV3Sim):
         return {
             "floor_feet": floor_feet,
             "surface_feet": surface_feet,
+            "surface_contact_points": surface_contact_points,
+            "max_simultaneous_floor_feet": set(floor_feet),
             "obstacle_bodies": obstacle_bodies,
             "obstacle_geoms": obstacle_geoms,
             "max_obstacle_force_n": max_obstacle_force_n,
@@ -769,14 +807,22 @@ def pursuit_command(
     # Global nearest point: a forward-only window that also advanced ``index``
     # created positive feedback and sent the index running away to the goal.
     local = int(np.argmin(np.linalg.norm(path - xy, axis=1)))
-    low = max(local - 1, 0)
-    high = min(local + 1, len(path) - 1)
+    tangent_index = min(
+        local + int(round(float(params.get("lookahead_m", 0.0)) / 0.02)),
+        len(path) - 1,
+    )
+    low = max(tangent_index - 1, 0)
+    high = min(tangent_index + 1, len(path) - 1)
     if high <= low:
         high = min(low + 1, len(path) - 1)
     tangent = path[high] - path[low]
     tangent_norm = float(np.linalg.norm(tangent))
     tangent = tangent / tangent_norm if tangent_norm > 1e-9 else np.array([1.0, 0.0])
-    normal = np.array([-tangent[1], tangent[0]])
+    local_low = max(local - 1, 0)
+    local_high = min(local + 1, len(path) - 1)
+    local_tangent = path[local_high] - path[local_low]
+    local_tangent /= max(float(np.linalg.norm(local_tangent)), 1e-9)
+    normal = np.array([-local_tangent[1], local_tangent[0]])
     cross_track = float((xy - path[local]) @ normal)
 
     # Point the body along the path tangent and crab sideways to remove the
@@ -786,8 +832,22 @@ def pursuit_command(
     desired_heading = math.atan2(float(tangent[1]), float(tangent[0]))
     heading_error = (desired_heading - yaw + math.pi) % (2.0 * math.pi) - math.pi
     speed = float(params["speed"])
-    speed_scale = 1.0 / (1.0 + 3.0 * abs(heading_error))
+    speed_scale = 1.0 / (
+        1.0 + float(params.get("heading_slow", 3.0)) * abs(heading_error))
     speed_scale /= 1.0 + float(params.get("k_slow", 0.0)) * abs(cross_track)
+    curvature_gain = float(params.get("curvature_slow", 0.0))
+    if curvature_gain:
+        back = max(local - 5, 0)
+        ahead = min(local + 5, len(path) - 1)
+        v1 = path[local] - path[back]
+        v2 = path[ahead] - path[local]
+        if np.linalg.norm(v1) > 1e-9 and np.linalg.norm(v2) > 1e-9:
+            bend = math.atan2(
+                float(v1[0] * v2[1] - v1[1] * v2[0]),
+                float(v1 @ v2),
+            )
+            arc = 0.5 * (float(np.linalg.norm(v1)) + float(np.linalg.norm(v2)))
+            speed_scale /= 1.0 + curvature_gain * abs(bend) / max(arc, 1e-6)
     command = np.array(
         [
             float(np.clip(speed * speed_scale, 0.0, speed)),
@@ -797,6 +857,26 @@ def pursuit_command(
         dtype=np.float32,
     )
     return command, local
+
+
+def slalom_projected_passes(
+    before: Tuple[float, float], after: Tuple[float, float],
+) -> List[Tuple[int, str, float]]:
+    """Forward projection crossings: x for poles 1-4, y for poles 5-6."""
+    passes = []
+    for index, (pole_x, pole_y) in enumerate(SLALOM_POLES, start=1):
+        axis = 0 if index <= 4 else 1
+        line = pole_x if axis == 0 else pole_y
+        first, last = float(before[axis]), float(after[axis])
+        if first <= line < last:
+            fraction = (line - first) / (last - first)
+            crossing = np.asarray(before) + fraction * (
+                np.asarray(after) - np.asarray(before))
+            offset = float(crossing[1] - pole_y) if axis == 0 else float(
+                crossing[0] - pole_x)
+            side = "left" if offset > 0.05 else ("right" if offset < -0.05 else "center")
+            passes.append((index, side, offset))
+    return passes
 
 
 def stand(sim: Robocon2027Sim, seconds: float = 1.0) -> np.ndarray:
@@ -862,7 +942,22 @@ def run_trial(
     low_frame_damping_scale: float = 1.0,
     recovery_body_path: Path = None,
     recovery_adaptation_path: Path = None,
+    beam_expert_body_path: Path = None,
+    beam_expert_adaptation_path: Path = None,
+    beam_switch_blend_duration_s: float = 0.3,
+    beam_finish_extra_m: float = None,
+    frame_callback=None,
 ) -> Dict:
+    beam_modes_enabled = (beam_expert_body_path is not None or
+                          beam_expert_adaptation_path is not None)
+    if beam_modes_enabled and (obstacle != "beam" or
+                               beam_expert_body_path is None or
+                               beam_expert_adaptation_path is None):
+        raise ValueError("beam mode switching needs both expert JIT files and obstacle=beam")
+    if beam_switch_blend_duration_s < 0:
+        raise ValueError("beam_switch_blend_duration_s must be nonnegative")
+    if beam_finish_extra_m is not None and beam_finish_extra_m < 0.25:
+        raise ValueError("beam_finish_extra_m must be at least 0.25 m")
     sim = Robocon2027Sim(
         obstacle, rules, body_path, adaptation_path,
         low_frame_crouch_center=low_frame_crouch_center,
@@ -881,8 +976,9 @@ def run_trial(
         if obstacle == "low_frame" and low_frame_crouch_center:
             sim.data.qpos[2] = 0.21
             mujoco.mj_forward(sim.model, sim.data)
+        last_target = sim.policy_dof_pos.copy()
         if not (obstacle == "low_frame" and low_frame_nominal_init):
-            stand(sim)
+            last_target = stand(sim)
         if obstacle == "low_frame" and low_frame_isaac_reset:
             # Isaac's env.reset() takes one zero-action control step, then
             # HistoryWrapper inserts that first observation into empty history.
@@ -905,6 +1001,11 @@ def run_trial(
         attempt = ObstacleAttempt(obstacle)
         pole_radius = 0.5 * float(rules["obstacles"]["slalom"]["pole_diameter_m"])
         raw_path = PATH_BY_OBSTACLE[obstacle]
+        if obstacle == "beam":
+            beam_length = float(rules["obstacles"]["beam"]["length_m"])
+            beam_entry_x = min(0.55, 0.25 * beam_length)
+            beam_entry_stage_end_x = min(1.0, 0.35 * beam_length)
+            beam_active_end_x = beam_length - 0.25
         path = resample_path(raw_path) if controller == "pursuit" else np.asarray(raw_path, dtype=float)
         params = PURSUIT[obstacle]
         index = 0
@@ -912,6 +1013,12 @@ def run_trial(
         min_pole_clearance_m = float("inf")
         max_centreline_error_m = 0.0
         bridge_active = False
+        bridge_min_edge_margin_m = float("inf")
+        bridge_min_edge_margin_by_foot = {}
+        bridge_min_support_center_margin_m = float("inf")
+        bridge_min_support_center_margin_by_foot = {}
+        bridge_foot_contact_trace = []
+        bridge_first_outside_ground_x_m = None
         contact_steps = 0
         contact_events: List[Dict] = []
         completion_time = None
@@ -939,6 +1046,15 @@ def run_trial(
         )
         trajectory: List[List[float]] = []
         dynamics_trace: List[Dict] = []
+        beam_mode = "locomotion"
+        beam_switch_events: List[Dict] = []
+        beam_blend_start_step = None
+        beam_blend_start_target = None
+        beam_exit_confirmed = False
+        beam_locomotion_config = None
+        if beam_modes_enabled:
+            beam_locomotion_config = load_config(DEFAULT_CONFIG)
+            apply_policy_profile(beam_locomotion_config, "config")
         finish_zone = SLALOM_ZONES["finish"]
         steps = max(1, int(max_seconds / sim.control_dt))
         for step in range(steps):
@@ -959,6 +1075,34 @@ def run_trial(
                     dtype=np.float32)
             if obstacle == "low_frame" and crossed_step is not None:
                 command = np.zeros(3, dtype=np.float32)
+
+            if beam_modes_enabled:
+                next_mode = None
+                if beam_mode == "locomotion" and not beam_switch_events and x >= -0.15:
+                    next_mode = "beam_expert"
+                elif beam_mode == "beam_expert" and x >= beam_length + 0.30:
+                    next_mode = "locomotion"
+                if next_mode is not None:
+                    model_paths = (
+                        (beam_expert_body_path, beam_expert_adaptation_path)
+                        if next_mode == "beam_expert" else
+                        (body_path or MODELS["beam"][0],
+                         adaptation_path or MODELS["beam"][1]))
+                    sim.switch_policy(
+                        *model_paths,
+                        beam_locomotion_config["policy_dof_pos"],
+                        float(beam_locomotion_config["clip_actions"]),
+                    )
+                    beam_mode = next_mode
+                    beam_blend_start_step = step
+                    beam_blend_start_target = np.asarray(last_target).copy()
+                    beam_switch_events.append({
+                        "mode": next_mode,
+                        "time_s": round(step * sim.control_dt, 3),
+                        "base_x_m": round(x, 4),
+                        "base_y_m": round(y, 4),
+                        "start_target_rad": [round(float(v), 4) for v in last_target],
+                    })
 
             action = sim.infer(command)
             if (obstacle == "low_frame" and crossed_step is None and
@@ -994,6 +1138,21 @@ def run_trial(
                                low_frame_unclipped_expert_target and
                                not locomotion_recovery_switched)
                 else clipped_target)
+            if beam_modes_enabled and beam_blend_start_step is not None:
+                elapsed = (step - beam_blend_start_step + 1) * sim.control_dt
+                alpha = (min(1.0, elapsed / beam_switch_blend_duration_s)
+                         if beam_switch_blend_duration_s > 0 else 1.0)
+                if step == beam_blend_start_step:
+                    beam_switch_events[-1]["raw_target_jump_max_rad"] = round(
+                        float(np.max(np.abs(target - beam_blend_start_target))), 4)
+                target = np.clip(
+                    (1.0 - alpha) * beam_blend_start_target + alpha * target,
+                    sim.lower, sim.upper)
+                if step == beam_blend_start_step:
+                    beam_switch_events[-1]["applied_target_jump_max_rad"] = round(
+                        float(np.max(np.abs(target - beam_blend_start_target))), 4)
+                if alpha >= 1.0:
+                    beam_blend_start_step = None
             if (obstacle == "low_frame" and locomotion_recovery_switched and
                     locomotion_switch_step is not None):
                 if step == locomotion_switch_step + 1:
@@ -1036,7 +1195,7 @@ def run_trial(
                 first_torque = np.clip(
                     sim.kp * (target - pre_q) - sim.kd * pre_dq,
                     -sim.torque_limits, sim.torque_limits)
-            if obstacle == "low_frame":
+            if obstacle in {"low_frame", "slalom", "beam"}:
                 substep_contacts = []
                 sim.step_control(
                     target,
@@ -1048,6 +1207,9 @@ def run_trial(
             else:
                 sim.step_control(target)
                 contacts = sim.contact_snapshot()
+            last_target = np.asarray(target).copy()
+            if frame_callback is not None:
+                frame_callback(sim, step + 1)
             if obstacle == "low_frame" and low_frame_dynamics_trace:
                 dynamics_trace.append({
                     "time_s": round((step + 1) * sim.control_dt, 4),
@@ -1074,6 +1236,7 @@ def run_trial(
                     }
                 )
 
+            pre_x, pre_y = x, y
             x, y, z = (float(value) for value in sim.data.qpos[:3])
             if step % 25 == 0:
                 trajectory.append(
@@ -1090,31 +1253,87 @@ def run_trial(
             if obstacle == "slalom":
                 if contacts["obstacle_bodies"]:
                     attempt.mark("pole_contact")
-                for name, centre in SLALOM_ZONES.items():
-                    if math.hypot(x - centre[0], y - centre[1]) <= 0.15:
-                        attempt.reach_zone(name)
+                zone_radius = 0.5 * float(
+                    rules["obstacles"]["slalom"]["required_zone_diameter_m"])
+                in_zone = {
+                    name: math.hypot(x - centre[0], y - centre[1]) <= zone_radius
+                    for name, centre in SLALOM_ZONES.items()
+                }
+                if in_zone["start"]:
+                    attempt.reach_zone("start")
+                projected = slalom_projected_passes((pre_x, pre_y), (x, y))
+                for pole_index, side, offset in projected:
+                    if pole_index == 5 and in_zone["corner"]:
+                        attempt.reach_zone("corner")
+                    attempt.pass_slalom_pole(pole_index, side, offset)
+                if in_zone["corner"]:
+                    attempt.reach_zone("corner")
+                if in_zone["finish"]:
+                    attempt.reach_zone("finish")
                 min_pole_clearance_m = min(
                     min_pole_clearance_m, sim.pole_clearance(SLALOM_POLES, pole_radius)
                 )
                 hull = convex_hull(sim.stance_points())
                 if any(point_in_polygon(pole, hull) for pole in SLALOM_POLES):
                     attempt.mark("pole_overflight")
-                reached = {"start", "corner", "finish"} <= attempt.reached_zones
-                if reached and math.hypot(x - finish_zone[0], y - finish_zone[1]) <= 0.15:
+                reached = len(attempt.slalom_events) == 9
+                if reached and math.hypot(x - finish_zone[0], y - finish_zone[1]) <= zone_radius:
                     attempt.mark("crossed")
                     completion_time = (step + 1) * sim.control_dt
                     break
             elif obstacle == "beam":
-                if x >= 0.55 and len(contacts["surface_feet"]) >= 2:
+                half_width = 0.5 * float(rules["obstacles"]["beam"]["width_m"])
+                per_foot = {}
+                for point in contacts["surface_contact_points"]:
+                    foot = point["foot"]
+                    contact_x, contact_y, _ = point["xyz"]
+                    margin = half_width - abs(contact_y)
+                    bridge_min_edge_margin_m = min(bridge_min_edge_margin_m, margin)
+                    bridge_min_edge_margin_by_foot[foot] = min(
+                        bridge_min_edge_margin_by_foot.get(foot, float("inf")), margin)
+                    if foot not in per_foot or margin < per_foot[foot]["margin_m"]:
+                        per_foot[foot] = {
+                            "x_m": round(contact_x, 4),
+                            "y_m": round(contact_y, 4),
+                            "margin_m": round(margin, 4),
+                        }
+                foot_centres = sim.stance_points()[1:]
+                for foot, centre in zip(("FL", "FR", "RL", "RR"), foot_centres):
+                    if foot not in contacts["surface_feet"]:
+                        continue
+                    centre_margin = half_width - abs(float(centre[1]))
+                    bridge_min_support_center_margin_m = min(
+                        bridge_min_support_center_margin_m, centre_margin)
+                    bridge_min_support_center_margin_by_foot[foot] = min(
+                        bridge_min_support_center_margin_by_foot.get(
+                            foot, float("inf")), centre_margin)
+                    if foot in per_foot:
+                        per_foot[foot]["foot_center_y_m"] = round(
+                            float(centre[1]), 4)
+                        per_foot[foot]["foot_center_margin_m"] = round(
+                            centre_margin, 4)
+                if step % 5 == 0 and per_foot:
+                    bridge_foot_contact_trace.append({
+                        "time_s": round((step + 1) * sim.control_dt, 3),
+                        "base_x_m": round(x, 4),
+                        "feet": per_foot,
+                    })
+                if x >= beam_entry_x and len(contacts["surface_feet"]) >= 2:
                     bridge_active = True
                     attempt.mark("entered_short_side")
-                if bridge_active and 0.25 <= x <= 2.75:
+                if bridge_active and 0.25 <= x <= beam_active_end_x:
                     max_centreline_error_m = max(max_centreline_error_m, abs(y))
-                    attempt.record_outside_ground_contacts(contacts["floor_feet"])
+                    attempt.record_outside_ground_contacts(
+                        contacts["max_simultaneous_floor_feet"])
                     if attempt.outside_ground_failure:
+                        bridge_first_outside_ground_x_m = x
                         break
-                if x >= 3.25:
+                if x >= beam_length + 0.25:
                     attempt.mark("exited_short_side")
+                    beam_exit_confirmed = True
+                finish_extra = (beam_finish_extra_m if beam_finish_extra_m is not None
+                                else (0.45 if beam_modes_enabled else 0.25))
+                if x >= beam_length + finish_extra:
                     attempt.mark("crossed")
                     completion_time = (step + 1) * sim.control_dt
                     break
@@ -1216,6 +1435,7 @@ def run_trial(
             "success": result.passed and not outside_gate,
             "reason": "outside_gate" if outside_gate else result.reason,
             "controller": controller,
+            "scene_xml_sha256": sim.scene_xml_sha256,
             "spawn": {
                 "x_m": round(spawn_x, 5),
                 "y_m": round(spawn_y, 5),
@@ -1230,7 +1450,7 @@ def run_trial(
             "frame_or_obstacle_contact_steps": contact_steps,
             "max_obstacle_contact_force_n": round(max_contact_force_n, 3),
             "contact_force_sample_dt_s": (
-                float(sim.model.opt.timestep) if obstacle == "low_frame"
+                float(sim.model.opt.timestep) if obstacle in {"low_frame", "slalom", "beam"}
                 else sim.control_dt),
             "violent_contact_force_threshold_n": (
                 violent_contact_force_threshold_n),
@@ -1267,6 +1487,34 @@ def run_trial(
                 round(min_pole_clearance_m, 4) if math.isfinite(min_pole_clearance_m) else None
             ),
             "max_centreline_error_m": round(max_centreline_error_m, 4),
+            "bridge_min_edge_margin_m": (
+                round(bridge_min_edge_margin_m, 4)
+                if math.isfinite(bridge_min_edge_margin_m) else None),
+            "bridge_min_edge_margin_by_foot_m": {
+                foot: round(margin, 4)
+                for foot, margin in bridge_min_edge_margin_by_foot.items()},
+            "bridge_min_support_center_margin_m": (
+                round(bridge_min_support_center_margin_m, 4)
+                if math.isfinite(bridge_min_support_center_margin_m) else None),
+            "bridge_min_support_center_margin_by_foot_m": {
+                foot: round(margin, 4)
+                for foot, margin in bridge_min_support_center_margin_by_foot.items()},
+            "bridge_foot_contact_trace": bridge_foot_contact_trace,
+            "bridge_first_outside_ground_x_m": (
+                round(bridge_first_outside_ground_x_m, 4)
+                if bridge_first_outside_ground_x_m is not None else None),
+            "bridge_failure_stage": (
+                None if result.passed else
+                "approach" if x < beam_entry_x else
+                "entry" if x < beam_entry_stage_end_x else
+                "middle" if x < beam_active_end_x else "exit"
+            ) if obstacle == "beam" else None,
+            "beam_modes_enabled": beam_modes_enabled,
+            "beam_mode_at_end": beam_mode if beam_modes_enabled else None,
+            "beam_exit_confirmed": beam_exit_confirmed if beam_modes_enabled else None,
+            "beam_switch_events": beam_switch_events,
+            "beam_switch_blend_duration_s": (beam_switch_blend_duration_s
+                                             if beam_modes_enabled else None),
             "contact_events": contact_events,
             "rule_metrics": {
                 **result.metrics,
@@ -1282,6 +1530,20 @@ def run_trial(
         }
     finally:
         sim.close()
+
+
+def wilson95(successes: int, trials: int) -> List[float]:
+    if trials <= 0:
+        raise ValueError("trials must be positive")
+    z = 1.959963984540054
+    rate = successes / trials
+    denom = 1.0 + z * z / trials
+    centre = (rate + z * z / (2.0 * trials)) / denom
+    radius = z * math.sqrt(
+        rate * (1.0 - rate) / trials + z * z / (4.0 * trials * trials)
+    ) / denom
+    return [round(max(0.0, centre - radius), 4),
+            round(min(1.0, centre + radius), 4)]
 
 
 def aggregate(obstacle: str, records: Iterable[Dict]) -> Dict:
@@ -1301,9 +1563,11 @@ def aggregate(obstacle: str, records: Iterable[Dict]) -> Dict:
         "trials": len(records),
         "successes": len(successful),
         "success_rate": round(rate, 4),
+        "wilson95": wilson95(len(successful), len(records)),
         "classification": _classify(obstacle, rate),
         "failure_reasons": reasons,
         "mean_completion_time_s": round(float(np.mean(times)), 3) if times else None,
+        "p50_completion_time_s": round(float(np.percentile(times, 50)), 3) if times else None,
         "p95_completion_time_s": round(float(np.percentile(times, 95)), 3) if times else None,
         "min_pole_clearance_m": round(float(np.min(clearances)), 4) if clearances else None,
         "max_centreline_error_m": round(
@@ -1324,6 +1588,25 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2027)
     parser.add_argument("--controller", choices=("pursuit", "waypoint"), default="pursuit")
     parser.add_argument("--max-seconds", type=float, default=None)
+    parser.add_argument("--slalom-speed", type=float, default=None)
+    parser.add_argument("--beam-width", type=float, default=None,
+                        help="Bridge course width [m]; default is rule size.")
+    parser.add_argument("--beam-length", type=float, default=None,
+                        help="Bridge course length [m]; default is rule size.")
+    parser.add_argument("--beam-height", type=float, default=None,
+                        help="Bridge course height [m]; default is rule size.")
+    parser.add_argument("--beam-speed", type=float, default=None,
+                        help="Bridge pursuit forward speed [m/s].")
+    parser.add_argument(
+        "--slalom-pole6-entry-x", type=float, default=None,
+        help="X coordinate of the (nominally 2.78, 1.35) m waypoint before pole 6.",
+    )
+    parser.add_argument("--slalom-lookahead", type=float, default=None)
+    parser.add_argument("--slalom-curvature-slow", type=float, default=None)
+    parser.add_argument("--slalom-k-cross", type=float, default=None)
+    parser.add_argument("--slalom-k-yaw", type=float, default=None)
+    parser.add_argument("--slalom-k-slow", type=float, default=None)
+    parser.add_argument("--slalom-heading-slow", type=float, default=None)
     parser.add_argument("--body", type=Path, default=None,
                         help="Optional TorchScript body override.")
     parser.add_argument("--adaptation", type=Path, default=None,
@@ -1428,6 +1711,44 @@ def main() -> None:
     args = parser.parse_args()
     if args.trials <= 0:
         parser.error("--trials must be positive")
+    slalom_overrides = {
+        "speed": args.slalom_speed,
+        "lookahead_m": args.slalom_lookahead,
+        "curvature_slow": args.slalom_curvature_slow,
+        "k_cross": args.slalom_k_cross,
+        "k_yaw": args.slalom_k_yaw,
+        "k_slow": args.slalom_k_slow,
+        "heading_slow": args.slalom_heading_slow,
+    }
+    if any(value is not None for value in slalom_overrides.values()) or args.slalom_pole6_entry_x is not None:
+        if args.obstacle != "slalom" or args.controller != "pursuit":
+            parser.error("slalom overrides require --obstacle slalom --controller pursuit")
+        for name, value in slalom_overrides.items():
+            if value is not None:
+                if not math.isfinite(value) or value < 0 or (
+                    name in {"speed", "k_cross", "k_yaw"} and value == 0):
+                    parser.error(f"invalid slalom {name}: {value}")
+                PURSUIT["slalom"][name] = value
+        if args.slalom_pole6_entry_x is not None:
+            entry_x = args.slalom_pole6_entry_x
+            if not math.isfinite(entry_x) or not 2.3 <= entry_x <= 3.05:
+                parser.error("--slalom-pole6-entry-x must be within [2.3, 3.05] m")
+            points = list(SLALOM_WAYPOINTS)
+            entry_index = points.index((2.78, 1.35))
+            points[entry_index] = (entry_x, 1.35)
+            PATH_BY_OBSTACLE["slalom"] = tuple(points)
+    beam_overrides = (args.beam_width, args.beam_length, args.beam_height,
+                      args.beam_speed)
+    if any(value is not None for value in beam_overrides):
+        if args.obstacle != "beam" or args.controller != "pursuit":
+            parser.error("beam overrides require --obstacle beam --controller pursuit")
+        if any(value is not None and (not math.isfinite(value) or value <= 0)
+               for value in beam_overrides):
+            parser.error("beam dimensions and speed must be finite and positive")
+        if args.beam_length is not None and args.beam_length <= 0.8:
+            parser.error("--beam-length must exceed 0.8 m")
+        if args.beam_speed is not None:
+            PURSUIT["beam"]["speed"] = args.beam_speed
     if args.low_frame_damping_scale < 0.0:
         parser.error("--low-frame-damping-scale must be nonnegative")
     if args.low_frame_crouch_residual_scale < 0.0:
@@ -1448,6 +1769,20 @@ def main() -> None:
     if args.low_frame_speed is not None:
         PURSUIT["low_frame"]["speed"] = args.low_frame_speed
     rules = load_rules()
+    beam_spec = rules["obstacles"]["beam"]
+    for key, value in (("width_m", args.beam_width),
+                       ("length_m", args.beam_length),
+                       ("height_m", args.beam_height)):
+        if value is not None:
+            beam_spec[key] = value
+    if args.beam_length is not None:
+        length = args.beam_length
+        PATH_BY_OBSTACLE["beam"] = (
+            (-0.60, 0.0), (0.0, 0.0),
+            (0.20 * length, 0.0), (0.50 * length, 0.0),
+            (0.80 * length, 0.0), (length, 0.0),
+            (length + 0.45, 0.0),
+        )
     low_frame_stages = {
         1: (0.36, 1.10, 0.40),
         2: (0.32, 0.90, 0.80),
@@ -1461,10 +1796,26 @@ def main() -> None:
     obstacles = ("slalom", "beam", "low_frame") if args.obstacle == "all" else (args.obstacle,)
     payload = {
         "rulebook": rules["rulebook"],
-        "kind": "zero_training_baseline",
+        "kind": ("fine_tuned_policy_evaluation" if args.body or args.adaptation
+                 else "zero_training_baseline"),
+        "provenance": git_provenance(),
+        "argv": sys.argv,
+        "versions": {"mujoco": mujoco.__version__, "torch": torch.__version__},
+        "input_sha256": {
+            "rules_yaml": sha256_file(
+                PROJECT_ROOT / "robodog_gym/envs/robocon_2027/config/rules.yaml"),
+            "policy_config_yaml": sha256_file(DEFAULT_CONFIG),
+            "base_xml": sha256_file(BASE_XML),
+        },
         "controller": args.controller,
         "seed": args.seed,
         "low_frame_speed_mps": PURSUIT["low_frame"]["speed"],
+        "pursuit_parameters": {name: dict(values) for name, values in PURSUIT.items()},
+        "slalom_contact_sample_dt_s": 0.005,
+        "slalom_waypoints_m": [list(point) for point in PATH_BY_OBSTACLE["slalom"]],
+        "beam_waypoints_m": [list(point) for point in PATH_BY_OBSTACLE["beam"]],
+        "beam_geometry_m": {key: beam_spec[key] for key in
+                            ("width_m", "length_m", "height_m")},
         "low_frame_nominal_init": bool(args.low_frame_nominal_init),
         "low_frame_straight_command": bool(args.low_frame_straight_command),
         "low_frame_zero_damping": bool(args.low_frame_zero_damping),
@@ -1478,12 +1829,22 @@ def main() -> None:
         "notes": {
             "slalom_layout": "six 100 mm posts, 900 mm centre spacing, L shaped",
             "slalom_overflight_detector": "post centre inside the convex hull of base+feet",
+            "slalom_pass_detector": "ordered forward projection crossings with alternating sides",
+            "min_pole_clearance_m": "foot-centre XY proxy only; negative does not prove 3D collision",
             "low_frame_geometry": "full-width roof, four corner posts, and per-geom lateral gate check",
             "low_frame_collision": "contact peak sampled each physics substep; violent/displacement threshold awaits referee/physical calibration",
         },
     }
     defaults = {"slalom": 60.0, "beam": 20.0, "low_frame": 16.0}
     for obstacle in obstacles:
+        body_path = args.body or MODELS[obstacle][0]
+        adaptation_path = args.adaptation or MODELS[obstacle][1]
+        payload["obstacles"][obstacle] = {
+            "body_path": str(body_path),
+            "body_sha256": sha256_file(body_path),
+            "adaptation_path": str(adaptation_path),
+            "adaptation_sha256": sha256_file(adaptation_path),
+        }
         records = []
         max_seconds = args.max_seconds or defaults[obstacle]
         for trial in range(args.trials):
@@ -1529,10 +1890,10 @@ def main() -> None:
                 f"time={record['completion_time_s']} xyz={record['final_base_xyz']}",
                 flush=True,
             )
-        payload["obstacles"][obstacle] = {
+        payload["obstacles"][obstacle].update({
             "aggregate": aggregate(obstacle, records),
             "records": records,
-        }
+        })
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

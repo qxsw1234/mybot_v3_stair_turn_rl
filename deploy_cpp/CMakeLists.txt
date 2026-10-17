@@ -10,7 +10,34 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(Torch REQUIRED)
+
+# CPU inference can use an ABI=1 PyTorch wheel directly. This avoids mixing the
+# training environment's ABI=0 Torch with Foxy, yaml-cpp and the vendor SDK,
+# and does not require the wheel's CUDA toolkit at CMake configure time.
+set(ROBOCON_TORCH_CPU_ABI1_ROOT "" CACHE PATH
+    "Path to an ABI=1 torch Python package directory for CPU-only deployment")
+if(ROBOCON_TORCH_CPU_ABI1_ROOT)
+  foreach(_torch_file
+      include/torch/script.h
+      lib/libtorch_cpu.so
+      lib/libc10.so)
+    if(NOT EXISTS "${ROBOCON_TORCH_CPU_ABI1_ROOT}/${_torch_file}")
+      message(FATAL_ERROR "Missing ABI=1 Torch file: ${ROBOCON_TORCH_CPU_ABI1_ROOT}/${_torch_file}")
+    endif()
+  endforeach()
+  add_library(robocon_torch_cpu SHARED IMPORTED)
+  set_target_properties(robocon_torch_cpu PROPERTIES
+    IMPORTED_LOCATION "${ROBOCON_TORCH_CPU_ABI1_ROOT}/lib/libtorch_cpu.so")
+  add_library(robocon_c10 SHARED IMPORTED)
+  set_target_properties(robocon_c10 PROPERTIES
+    IMPORTED_LOCATION "${ROBOCON_TORCH_CPU_ABI1_ROOT}/lib/libc10.so")
+  set(TORCH_LIBRARIES robocon_torch_cpu robocon_c10)
+  set(ROBOCON_TORCH_INCLUDE_DIRS
+    "${ROBOCON_TORCH_CPU_ABI1_ROOT}/include"
+    "${ROBOCON_TORCH_CPU_ABI1_ROOT}/include/torch/csrc/api/include")
+else()
+  find_package(Torch REQUIRED)
+endif()
 
 set(UNITREE_SDK_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include/Unitree_Motor")
 set(UNITREE_SDK_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib")
@@ -28,6 +55,7 @@ endif()
 include_directories(
   include
   ${UNITREE_SDK_INCLUDE_DIR}
+  ${ROBOCON_TORCH_INCLUDE_DIRS}
 )
 
 set(COMMON_SOURCES
@@ -42,13 +70,20 @@ set(COMMON_SOURCES
   src/robot_visualizer.cpp
 )
 
-set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib;/opt/libtorch/lib")
+if(ROBOCON_TORCH_CPU_ABI1_ROOT)
+  set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib;${ROBOCON_TORCH_CPU_ABI1_ROOT}/lib")
+else()
+  set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib;/opt/libtorch/lib")
+endif()
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
 add_executable(deploy_node
   ${COMMON_SOURCES}
   src/deploy_node.cpp
 )
+if(ROBOCON_TORCH_CPU_ABI1_ROOT)
+  target_compile_definitions(deploy_node PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
+endif()
 target_link_libraries(deploy_node
   ${UNITREE_SDK_LIB}
   ${TORCH_LIBRARIES}

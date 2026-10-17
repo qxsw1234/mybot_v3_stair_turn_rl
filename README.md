@@ -5,15 +5,25 @@ ROBOCON 仿生足式机器人挑战赛。控制器在 **Isaac Gym** 中训练，
 中做 sim2sim 验证，并通过 ROS2 / C++ 节点部署到实机。
 
 当前已具备平地、转向、站立和部分台阶运动基础。2027 障碍赛已有绕桩、单木桥和限高框架的仿真基线，**当前处于 M2 限高 Stage 1，尚未完成跨引擎与实机验收，Stage 2 关闭**。
+2026-10-16 更新：绕桩 MuJoCo 阶段回归 190/200、成功回合 P95 35.46 s；0.80 m 宽桥从 `059950` 完成 25+200 迭代续训，但留出 Isaac 成功率低于基线，台阶回归为 99/120 对基线 116/120，**未晋级窄桥**。desktop CPU ABI=1 部署链已构建，完成 10 分钟 fake 遥测；实机标定仍待完成。详见[执行状态](docs/2027_ROBOCON_EXECUTION_STATUS.md)。
+2026-10-17 更新：新增桥/平地/转向/台阶回放课程和固定 `059950` 锚点的桥专家 `060148`；规则桥双模式 100 回合为 94/100，未达 ≥95/100 切换门槛，**不晋级 0.60 m 或实机**。视频与完整证据见[桥专家回放报告](docs/2027_ROBOCON_BEAM_REPLAY_20261017.md)。
 
 优先阅读：
 
+- [2027 当前进度快照](docs/2027_ROBOCON_CURRENT_PROGRESS_20261017.md)
+- [下一步整体规划：专项重训与整场连续运行](docs/2027_ROBOCON_RETRAINING_MASTER_PLAN_20261017.md)
+- [八项连续新地图与键盘入口](docs/2027_ROBOCON_FULL_MAP_PREVIEW_20261017.md)
 - [2027 当前执行状态](docs/2027_ROBOCON_EXECUTION_STATUS.md)
+- [当前 2027 规则场景现场键盘测试](docs/2027_ROBOCON_LIVE_TEST_20261017.md)
+- [全场景键盘体验入口与场景版本说明](docs/2027_ROBOCON_INTERACTIVE_SCENES_20261017.md)
 - [下一步详细计划与完成判据](docs/2027_ROBOCON_NEXT_STEPS_20261015.md)
+- [八项目后续训练路线与开源算法](docs/2027_ROBOCON_ALL_EVENTS_ROADMAP_20261016.md)
+- [单木桥回放课程与 100 回合双模式筛选](docs/2027_ROBOCON_BEAM_REPLAY_20261017.md)
+- [单木桥双模式仿真试验](docs/2027_ROBOCON_MODE_SWITCH_PILOT_20261016.md)
 - [开源案例调研与采用建议](docs/2027_ROBOCON_OPEN_SOURCE_REFERENCES.md)
 - [checkpoint 与评测证据校验清单](docs/2027_ROBOCON_ARTIFACT_MANIFEST.json)
 
-本次GitHub更新仅包含代码、文档、结果摘要与校验清单。201份原始评测JSON/NPZ和checkpoint/JIT本体留在desktop，不随clone下载。
+本次GitHub更新仅包含代码、文档、结果摘要与校验清单。原清单的201份原始评测JSON/NPZ、本轮新增原始结果以及checkpoint/JIT本体留在desktop，不随clone下载。
 
 ---
 
@@ -112,6 +122,39 @@ pip install -e .
 ---
 
 ## 5. 快速开始：MuJoCo 交互仿真
+
+要现场驾驶当前已实现的 **2027 规则场景**，在 `desktop` 图形桌面的终端运行：
+
+```bash
+cd /home/ldl/mybot_v3_stair_turn_rl
+./run_robocon_2027_live.sh beam --duration 3600
+```
+
+窗口内按 `4/5/6` 分别切换到规则绕桩、单木桥、限高；其余键位和模型见[2027 现场测试说明](docs/2027_ROBOCON_LIVE_TEST_20261017.md)。2027 其余五项尚无可验收规则场景。下面的旧地图入口只用于历史场地观察。
+
+### 2027 规则尺寸单木桥：当前双模式候选
+
+在 `desktop` 的图形桌面或已连接到该桌面的远程桌面中，打开终端：
+
+```bash
+cd /home/ldl/mybot_v3_stair_turn_rl
+./run_robocon_2027_beam.sh
+```
+
+默认显示 **2027 规则桥 0.40×3.00×0.10 m**，从桥前起步；加载冻结行走模型 `059950` 和研究桥专家 `060148`，位置到 `x≥−0.15 m` 时自动切入专家，出桥 `x≥3.30 m` 时切回行走。初次尝试按住 `W` 缓慢前进，观察桥边位置，必要时用 `A`/`D` 修正横向、`Q`/`E` 修正朝向。
+
+| 按键 | 作用 |
+| --- | --- |
+| `W` / `S` | 前进 / 后退 |
+| `A` / `D` | 左 / 右横移 |
+| `Q` / `E` | 左 / 右转向 |
+| `1` / `2` / `3` | 强制行走 / 强制桥专家 / 按位置自动切换 |
+| `R` | 回到规则桥入口 |
+| 关窗或终端 `Ctrl+C` | 退出 |
+
+想先只看原始行走策略，可以用 `./run_robocon_2027_beam.sh --mode locomotion`；想减速，可加 `--vx 0.18`。按键由 `desktop` 图形会话接收，只有 SSH 终端而没有打开桌面画面时无法目视操控。若使用 `ssh desktop` 启动，窗口出现在 `desktop` 显示器上；请同时连接其远程桌面。终端会显示当前模型、切换位置、跌倒和桥外落足提示。这个入口用于交互观察，**不会给出正式规则得分或更新 100 回合通过率**。`060148` 尚未达到晋级门槛，不用于实机。
+
+### 历史 RoboCon 地图
 
 项目提供一键启动脚本 `run_mujoco.sh`，加载**历史 RoboCon 场地**（不能用于2027规则验收），默认进入
 键盘遥控模式：
@@ -267,23 +310,23 @@ python -u scripts/view_low_bar.py --clearance 0.30
 
 ---
 
-## 8. 当前进度（2026-10-15 核查）
+## 8. 当前进度（2026-10-16 更新）
 
 采用 2027 计划的 M0–M5 编号；旧版木桥 A/B、T 字台阶等方案是历史资料。
 
 | 能力 | 最近已核实结果 | 判断 |
 |---|---|---|
 | 通用运动 `059950` | 平地、转向、站立与台阶基线 | 保留，不覆盖 |
-| 绕桩 | MuJoCo 19/20，平均72.63 s，P95 73.39 s | 小样本候选；需复核判据、提速和扩大验收 |
+| 绕桩 | MuJoCo 留出 190/200，成功 P95 35.46 s | 阶段目标达到；待 Isaac 同规则与实机 |
 | 单木桥 400×3000×100 mm | MuJoCo 14/20，6次桥外落足失败 | 需专项微调 |
-| 台阶 8/10/12 cm | MuJoCo 18/20、20/20、16/20 | 需新版规则及Isaac配对评测 |
+| 台阶 8/10/12 cm | Isaac 历史直线台阶：`059950` 116/120，桥候选 `060173` 99/120 | 桥候选基础步态退化；待跨引擎配对 |
 | 限高 Stage 1，.36×1.10×.40 m | `064242` Isaac nominal 192/192；`064341` MuJoCo原设阻尼2/24 | 未通过跨引擎门槛 |
 | 限高诊断 | `064341` 在3×被动阻尼下120/120 | 未经实机标定，不能算正式通过 |
 | 高墙/完整跨沟/砖木坑/轮胎阵/梅花桩 | 无完成验收证据 | 后续专项 |
 
 已完成两轮限高续训和动力学对照。保留`064242`原候选，`064341`研究候选、`064400`备选；`064540`跨引擎退化，排除。完整run路径与SHA-256见清单，不能只靠数字编号或`latest`选择模型。
 
-10月15日未发现训练/评测进程；环境导入、CUDA及13项规则测试正常。遥测发布代码已准备，C++完整构建仍受Torch/ROS依赖链接问题阻塞。`hardware_capability.yaml`实测字段未补齐。
+10月16日规则测试 19 项通过；desktop 的 CPU ABI=1 部署节点已干净构建和安装，fake StandUp 连续 600 s 遥测通过，详见[部署报告](docs/deployment_build_report.md)。`hardware_capability.yaml`实测字段未补齐，尚无真实电机反馈和实机标定。
 
 ### 复查 desktop 本地证据
 
@@ -308,8 +351,8 @@ python scripts/audit_robocon_2027_artifacts.py --verify --include-checkpoints
   换机器或重新 clone 后需要从已保存的 run/备份拷贝并校验，无须因此从头训练。
 - **Python MuJoCo bridge 已支持119/116及126/123单帧契约**，由JIT输入推断。
   7维限高观测已接入专项评测；这不代表C++部署观测和实机验收完成。
-- **C++部署构建阻塞**：现有Torch/ROS/SDK ABI及依赖组合链接失败；
-  不应把遥测代码已编译的对象文件当作可运行节点。
+- **部署链仍需实机验证**：desktop CPU ABI=1 路径已成功构建并完成 fake 测试；
+  机器人目标机依赖、硬件采样时间戳、数据年龄和动力学标定仍未验证。
 - **脚本中存在本机绝对路径**（`/home/ldl/anaconda3/...`、
   `/home/ldl/mybot_v3_stair_turn_rl`）。迁移到其他机器时需要相应修改。
 - **训练指标已修正**：episode 统计按实际完成数量加权，且每个 physics step
@@ -342,6 +385,9 @@ target_dof_pos = policy_dof_pos + action * 0.25
 
 | 文档 | 内容 |
 |---|---|
+| [2027 当前进度快照](docs/2027_ROBOCON_CURRENT_PROGRESS_20261017.md) | 八项证据层级、模型结果、整场地图与未完成项 |
+| [下一步整体规划](docs/2027_ROBOCON_RETRAINING_MASTER_PLAN_20261017.md) | 课程重训、八项路线、阶段门槛、实机条件与整场验收 |
+| [2027 八项连续地图](docs/2027_ROBOCON_FULL_MAP_PREVIEW_20261017.md) | 一张新地图、键盘驾驶、最新可用模型切换与预览边界 |
 | [2027 下一步计划](docs/2027_ROBOCON_NEXT_STEPS_20261015.md) | 当前工作包、方法、样本数与完成判据 |
 | [2027 执行状态](docs/2027_ROBOCON_EXECUTION_STATUS.md) | 原始结果、候选选择和阻塞项 |
 | [2027 总计划](docs/2027_ROBOCON_OBSTACLE_TRAINING_PLAN.md) | 180秒、八障碍、M0–M5 |

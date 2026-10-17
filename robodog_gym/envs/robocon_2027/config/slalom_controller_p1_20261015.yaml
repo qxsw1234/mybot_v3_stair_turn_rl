@@ -1,0 +1,34 @@
+name: slalom_p1_20261015
+status: frozen_for_heldout_simulation
+obstacle: slalom
+engine: MuJoCo
+checkpoint_run: runs/mybot_v3_sim2sim_phase3b_resume_059500/2026-10-03_07-04-56.647780
+body: checkpoints/body_059950.jit
+body_sha256: 7543bc5828848c7a647665947ac558c1697367cbd4173f22d7945448e1cbed48
+adaptation: checkpoints/adaptation_module_059950.jit
+adaptation_sha256: 2a73bd53408f0be1c33d24dbd4dd98d5d8885d0b529d55130c625a627ed76789
+controller: pursuit
+params:
+  speed_mps: 0.55
+  k_cross: 4.0
+  k_yaw: 1.4
+  vy_max_mps: 0.40
+  yaw_max_rad_s: 0.45
+  k_slow: 3.0
+  heading_slow: 3.0
+  lookahead_m: 0.0
+  curvature_slow: 0.0
+  pole6_entry_x_m: 2.60
+  pole6_entry_y_m: 1.35
+assessment:
+  tuning_seed: 2026101601
+  tuning_trials: 20
+  heldout_seeds: [2026101602, 2026101603, 2026101604, 2026101605]
+  trials_per_heldout_seed: 50
+  max_seconds: 100
+  objective_success_rate: 0.90
+  objective_p95_seconds: 40
+notes:
+  - "059950 remains unchanged; only planner parameters and one waypoint changed."
+  - "Foot-centre XY clearance is a diagnostic proxy; pole contacts come from MuJoCo substeps."
+  - "The four held-out seeds must not be used to retune this candidate."

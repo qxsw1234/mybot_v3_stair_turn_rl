@@ -169,6 +169,12 @@ class LeggedRobot(BaseTask):
 
         self._render_headless()
 
+    def _bridge_env_mask(self):
+        """Only the fixed bridge columns may receive bridge rewards/terminals."""
+        if getattr(self.cfg.terrain, 'bridge_replay', False):
+            return self.terrain_types < int(self.cfg.terrain.bridge_train_cols)
+        return torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+
     def check_termination(self):
         """ Check if environments need to be reset
         """
@@ -206,12 +212,57 @@ class LeggedRobot(BaseTask):
             self.reset_buf |= self.low_bar_collision_this_step
             self.reset_buf |= self.low_bar_missed_gate_this_step
 
+        if getattr(self.cfg.terrain, 'robocon_beam', False):
+            beam_env = self._bridge_env_mask()
+            start = float(self.cfg.terrain.bridge_start_offset)
+            length = float(self.cfg.terrain.bridge_length)
+            height = float(self.cfg.terrain.bridge_height)
+            half_width = 0.5 * float(self.cfg.terrain.bridge_width)
+            base_x = self.base_pos[:, 0] - self.env_origins[:, 0]
+            base_y = self.base_pos[:, 1] - self.env_origins[:, 1]
+            foot_x = self.foot_positions[:, :, 0] - self.env_origins[:, 0:1]
+            foot_y = self.foot_positions[:, :, 1] - self.env_origins[:, 1:2]
+            foot_z = self.foot_positions[:, :, 2] - self.env_origins[:, 2:3]
+            support = self.contact_forces[:, self.feet_indices, 2] > 1.0
+            on_beam = (
+                support & (foot_x >= start) & (foot_x <= start + length)
+                & (foot_y.abs() <= half_width)
+                & (foot_z >= height - 0.015)
+            )
+            self.beam_entered_ever |= (
+                beam_env & (base_x >= start + 0.20) & (base_x <= start + length - 0.20)
+                & (base_y.abs() <= half_width)
+                & (on_beam.sum(dim=1) >= 2)
+            )
+            floor_outside = (
+                support & (foot_x >= start) & (foot_x <= start + length)
+                & (foot_y.abs() > half_width + 0.02)
+                & (foot_z < height + 0.04)
+            )
+            active = (
+                (base_x >= start + 0.20)
+                & (base_x <= start + length - 0.20)
+            )
+            self.beam_outside_this_step = beam_env & active & (
+                floor_outside.sum(dim=1) >= 2)
+            self.beam_outside_ever |= self.beam_outside_this_step
+            self.reset_buf |= self.beam_outside_this_step
+            self.beam_success_this_step = (
+                beam_env & self.beam_entered_ever & ~self.beam_outside_ever
+                & (base_x >= start + length + 0.20)
+                & (base_y.abs() <= half_width + 0.15)
+                & ~self.reset_buf
+            )
+            self.beam_success_ever |= self.beam_success_this_step
+
         self.early_termi_buf = self.reset_buf.clone() #backup early terminated robodogs
         self.time_out_buf = self.episode_length_buf > self.cfg.env.max_episode_length 
         self.reset_buf |= self.time_out_buf
         if (getattr(self.cfg.terrain, 'robocon_low_bar', False) and
                 getattr(self.cfg.terrain, 'low_bar_terminate_on_success', True)):
             self.reset_buf |= self.low_bar_success_this_step
+        if getattr(self.cfg.terrain, 'robocon_beam', False):
+            self.reset_buf |= self.beam_success_this_step
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -297,6 +348,20 @@ class LeggedRobot(BaseTask):
                 self.low_bar_missed_gate_ever[train_env_ids].float().mean())
             self.extras["train/episode"]["low_bar_max_force"] = (
                 self.low_bar_max_contact_force[train_env_ids].mean())
+        if (getattr(self.cfg.terrain, 'robocon_beam', False)
+                and len(train_env_ids) > 0):
+            beam_train_ids = train_env_ids[self._bridge_env_mask()[train_env_ids]]
+            self.extras["train/episode"]["beam_replay_episode_fraction"] = (
+                1.0 - len(beam_train_ids) / len(train_env_ids))
+            self.extras["train/episode"]["beam_replay_env_fraction"] = (
+                1.0 - self._bridge_env_mask()[:self.num_train_envs].float().mean())
+            if len(beam_train_ids) > 0:
+                self.extras["train/episode"]["beam_success_rate"] = (
+                    self.beam_success_ever[beam_train_ids].float().mean())
+                self.extras["train/episode"]["beam_outside_ground_rate"] = (
+                    self.beam_outside_ever[beam_train_ids].float().mean())
+                self.extras["train/episode"]["beam_entered_rate"] = (
+                    self.beam_entered_ever[beam_train_ids].float().mean())
         # log additional curriculum info
         if self.cfg.terrain.curriculum:
             self.extras["train/episode"]["terrain_level"] = torch.mean(
@@ -345,6 +410,13 @@ class LeggedRobot(BaseTask):
             self.extras["time_outs"] = self.time_out_buf[:self.num_train_envs]
 
         self.gait_indices[env_ids] = 0
+
+        if getattr(self.cfg.terrain, 'robocon_beam', False):
+            self.beam_entered_ever[env_ids] = False
+            self.beam_outside_ever[env_ids] = False
+            self.beam_success_ever[env_ids] = False
+            self.beam_outside_this_step[env_ids] = False
+            self.beam_success_this_step[env_ids] = False
 
         if getattr(self.cfg.terrain, 'robocon_low_bar', False):
             self.low_bar_crossed_plane[env_ids] = False
@@ -1133,6 +1205,34 @@ class LeggedRobot(BaseTask):
                 self.commands[stair_env_ids, 2] = yaw_limit * (
                     2.0 * torch.rand(len(stair_env_ids), device=self.device) - 1.0)
 
+        if getattr(self.cfg.commands, 'bridge_replay_commands', False):
+            columns = self.terrain_types[env_ids]
+            bridge_ids = env_ids[columns < 15]
+            flat_ids = env_ids[columns == 15]
+            turn_ids = env_ids[columns == 16]
+            stair_ids = env_ids[columns >= 17]
+            self.commands[bridge_ids, :3] = torch.tensor(
+                [float(self.cfg.commands.bridge_replay_vx), 0.0, 0.0],
+                device=self.device)
+            if len(flat_ids) > 0:
+                self.commands[flat_ids, 0] = 0.15 + 0.25 * torch.rand(
+                    len(flat_ids), device=self.device)
+                self.commands[flat_ids, 1:3] = 0.0
+            if len(turn_ids) > 0:
+                self.commands[turn_ids, 0] = 0.15 + 0.15 * torch.rand(
+                    len(turn_ids), device=self.device)
+                self.commands[turn_ids, 1] = 0.30 * (
+                    torch.rand(len(turn_ids), device=self.device) - 0.5)
+                self.commands[turn_ids, 2] = 0.80 * (
+                    torch.rand(len(turn_ids), device=self.device) - 0.5)
+            if len(stair_ids) > 0:
+                self.commands[stair_ids, 0] = 0.25 + 0.15 * torch.rand(
+                    len(stair_ids), device=self.device)
+                self.commands[stair_ids, 1] = 0.06 * (
+                    torch.rand(len(stair_ids), device=self.device) - 0.5)
+                self.commands[stair_ids, 2] = 0.10 * (
+                    torch.rand(len(stair_ids), device=self.device) - 0.5)
+
         if self.cfg.commands.heading_command:
             # sample heading command in heading_range
             # TODO implement heading_range
@@ -1539,6 +1639,11 @@ class LeggedRobot(BaseTask):
         self.low_bar_missed_gate_this_step = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_just_passed = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_success_this_step = torch.zeros_like(self.low_bar_crossed_plane)
+        self.beam_entered_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.beam_outside_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.beam_success_ever = torch.zeros_like(self.low_bar_crossed_plane)
+        self.beam_outside_this_step = torch.zeros_like(self.low_bar_crossed_plane)
+        self.beam_success_this_step = torch.zeros_like(self.low_bar_crossed_plane)
         self.low_bar_post_pass_stable_steps = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device)
         self.low_bar_contact_steps = torch.zeros(
